@@ -43,6 +43,31 @@
 </div>
 {% endif %}
 
+{% if utilization_series | reject("none") | list | length > 1 %}
+<h2>Over the last {{ series_hours }} hours</h2>
+<div class="panel">
+  <div class="series">
+    <div>
+      <div class="k">gpu utilization, mean across running jobs</div>
+      {% set u = utilization_series | reject("none") | list %}
+      <div class="v">{{ "%.0f"|format(u[-1]) }}%</div>
+      <div class="spark">{{ utilization_series | sparkline(38, 100) | safe }}</div>
+      <div class="axis"><span>24h ago</span><span>0 to 100%, peak {{ "%.0f"|format(u | max) }}%</span><span>now</span></div>
+    </div>
+    <div>
+      <div class="k">jobs waiting</div>
+      {% set q = queue_series | reject("none") | list %}
+      <div class="v">{{ "%.0f"|format(q[-1]) }}</div>
+      <div class="spark queue">{{ queue_series | sparkline(38) | safe }}</div>
+      <div class="axis"><span>24h ago</span><span>peak {{ "%.0f"|format(q | max) }}</span><span>now</span></div>
+    </div>
+  </div>
+  <p class="dim" style="margin:.9rem 0 0">
+    A break in a line means nothing was running, not that a GPU sat idle.
+  </p>
+</div>
+{% endif %}
+
 <h2>Running now</h2>
 <div class="panel">
 {% if holders %}

@@ -115,6 +115,30 @@ class Metrics:
         points = self.series(name, since=since)
         return max((p.value for p in points), default=None)
 
+    def bucketed(
+        self, name: str, since: dt.datetime, until: dt.datetime, buckets: int = 48
+    ) -> list[float | None]:
+        """The series averaged into equal time buckets, oldest first.
+
+        `None` for a bucket with no samples, so a gap in the record renders as a
+        gap rather than as zero. A pool that was switched off for six hours did
+        not have a GPU sitting at 0%; nothing was running at all, and drawing
+        that as a floor would be a different and wrong claim.
+        """
+        span = (until - since).total_seconds()
+        if span <= 0 or buckets < 1:
+            return []
+        sums = [0.0] * buckets
+        counts = [0] * buckets
+        for point in self.series(name, since=since):
+            index = int((point.at - since).total_seconds() / span * buckets)
+            index = min(max(index, 0), buckets - 1)
+            sums[index] += point.value
+            counts[index] += 1
+        return [
+            (sums[i] / counts[i]) if counts[i] else None for i in range(buckets)
+        ]
+
     def prune(self, older_than: dt.datetime) -> int:
         """Series older than the retention window. Nothing calls this on a
         schedule; `gpu metrics --prune` does, when somebody decides to."""

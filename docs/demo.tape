@@ -33,7 +33,7 @@ Sleep 4500ms
 
 Type "clear"
 Enter
-Type "# The training script for bo died an hour ago. Nobody noticed."
+Type "# The training script for bo died six hours ago. Nobody noticed."
 Enter
 Sleep 700ms
 Type "gpu reclaim"

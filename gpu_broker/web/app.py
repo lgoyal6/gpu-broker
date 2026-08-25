@@ -81,6 +81,7 @@ def create_app(
     templates.env.filters["money"] = _money
     templates.env.filters["ago"] = _ago
     templates.env.filters["duration"] = _duration
+    templates.env.filters["sparkline"] = _sparkline
     app.state.templates = templates
     app.mount("/static", StaticFiles(directory=str(HERE / "static")), name="static")
 
@@ -200,9 +201,15 @@ def create_app(
                   broker: Broker = Depends(broker_for)) -> Any:
         now = broker.clock.now()
         holders = broker.who()
+        since = now - dt.timedelta(hours=24)
+        from ..metrics import QUEUE_DEPTH, UTILIZATION
+
         return page(
             request,
             "dashboard.html",
+            utilization_series=broker.metrics.bucketed(UTILIZATION, since, now),
+            queue_series=broker.metrics.bucketed(QUEUE_DEPTH, since, now),
+            series_hours=24,
             holders=[
                 {
                     "job": job,
@@ -503,6 +510,56 @@ def _recent_utilization(broker: Broker, job_id: str) -> float | None:
 def _peak_utilization(broker: Broker, job_id: str) -> float | None:
     samples = broker.store.samples_for(job_id, limit=500)
     return max((sample.gpu_percent for sample in samples), default=None)
+
+
+def _sparkline(values: list[float | None], height: int = 34, ceiling: float | None = None) -> str:
+    """An inline SVG polyline. No chart library, no build step.
+
+    Gaps stay gaps: a run of `None` breaks the line rather than dropping it to
+    zero, because "nothing was running" and "a GPU sat idle" are different
+    claims and only one of them is a problem.
+    """
+    points = [v for v in values if v is not None]
+    if not points:
+        return ""
+    top = ceiling if ceiling is not None else max(max(points), 1.0)
+    width = max(len(values) * 6, 60)
+    step = width / max(len(values) - 1, 1)
+
+    segments: list[list[str]] = []
+    current: list[str] = []
+    for index, value in enumerate(values):
+        if value is None:
+            if current:
+                segments.append(current)
+            current = []
+            continue
+        x = index * step
+        y = height - (min(value, top) / top) * (height - 2) - 1
+        current.append(f"{x:.1f},{y:.1f}")
+    if current:
+        segments.append(current)
+    if not segments:
+        return ""
+
+    # A run of one is drawn as a dot, not dropped. A pool that is used twice a
+    # day has every sample isolated between gaps, and a polyline needs two
+    # points -- so the honest-looking chart would be a blank panel.
+    marks = []
+    for segment in segments:
+        if len(segment) > 1:
+            marks.append(
+                f'<polyline points="{" ".join(segment)}" fill="none" '
+                f'stroke="currentColor" stroke-width="1.5" '
+                f'stroke-linejoin="round" stroke-linecap="round"/>'
+            )
+        else:
+            x, y = segment[0].split(",")
+            marks.append(f'<circle cx="{x}" cy="{y}" r="1.6" fill="currentColor"/>')
+    return (
+        f'<svg viewBox="0 0 {width:.0f} {height}" preserveAspectRatio="none" '
+        f'width="100%" height="{height}" role="img">{"".join(marks)}</svg>'
+    )
 
 
 def _money(value, currency=Currency.USD) -> str:

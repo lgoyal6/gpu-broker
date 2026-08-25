@@ -24,7 +24,7 @@ home.mkdir(parents=True)
 # been waiting since January and an idle window with nothing in it.
 import datetime as _dt
 
-START = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(minutes=68)
+START = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(hours=6, minutes=8)
 clock = ManualClock(START)
 cfg = load_config(home)
 cloud = FakeBackend("cloud", clock=clock, currency=Currency.USD,
@@ -50,7 +50,7 @@ for who, spent in (("cy", "31.00"), ("bo", "6.00")):
 
 # cy submits first, ana last -- fair share should invert that.
 for who in ("cy", "bo", "ana"):
-    b.submit(user_id=who, command=f"python train.py --user {who}", gpu_type="a10g", hours=3)
+    b.submit(user_id=who, command=f"python train.py --user {who}", gpu_type="a10g", hours=9)
     clock.advance(minutes=2)
 
 # bo's script dies silently right after it starts. This is the failure the
@@ -58,7 +58,9 @@ for who in ("cy", "bo", "ana"):
 b.tick()
 dead = next(j for j in b.store.active_jobs() if j.user_id == "bo")
 cloud.set_utilization(dead.job_id, 0.0)
-for _ in range(60):
+# Six hours at one-minute ticks. Long enough for the dashboard's 24-hour chart
+# to have something to draw, and dense enough for the idle window at the end.
+for _ in range(360):
     clock.advance(minutes=1)
     b.tick()
 

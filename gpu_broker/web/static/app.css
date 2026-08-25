@@ -35,6 +35,13 @@ code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-
 .s-FAILED, .s-REFUSED, .s-RECLAIMED { color: var(--bad); border-color: var(--bad); }
 .s-CANCELLED, .s-PREEMPTED { color: var(--warn); border-color: var(--warn); }
 .s-QUEUED { color: var(--dim); border-color: var(--line); }
+.series { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1.4rem; }
+.series .k { color: var(--dim); font-size: .82em; text-transform: uppercase; letter-spacing: .04em; }
+.series .v { font-size: 1.5rem; font-variant-numeric: tabular-nums; line-height: 1.2; }
+.series .axis { display: flex; justify-content: space-between; color: var(--dim);
+  font-size: .78em; margin-top: .25rem; }
+.spark { color: var(--busy); margin-top: .4rem; border-bottom: 1px solid var(--line); }
+.spark.queue { color: var(--idle); }
 .meter { display: inline-flex; align-items: center; gap: .5rem; white-space: nowrap; }
 .bar { display: inline-block; background: var(--line); border-radius: 3px; height: 6px;
   overflow: hidden; width: 72px; vertical-align: middle; }
