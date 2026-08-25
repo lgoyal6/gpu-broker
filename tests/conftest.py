@@ -183,3 +183,55 @@ def local_job(job_id: str, user_id: str, command: str = "python train.py", hours
         submitted_at=now,
         updated_at=now,
     )
+
+
+# ------------------------------------------------------- the public status page
+
+
+@pytest.fixture
+def public_app(broker, state_dir, config, clock):
+    """The status app over the same database the test is driving.
+
+    A fresh connection per request, which is what the real app does and what
+    TestClient requires anyway: it serves on another thread, and a SQLite
+    connection belongs to the thread that opened it. The clock is shared, so
+    "the last 7 days" means the same thing here as in the test.
+    """
+    from gpu_broker.web.publicapp import create_public_app
+
+    return create_public_app(
+        lambda: Broker.open(state_dir, clock=clock, backends=[], config=config)
+    )
+
+
+@pytest.fixture
+def public_client(public_app):
+    from fastapi.testclient import TestClient
+
+    return TestClient(public_app)
+
+
+# --------------------------------------------------------------- pilot mode
+
+
+@pytest.fixture
+def pilot_broker(state_dir, clock, lab_backend):
+    """A broker whose only capacity is the lab machine.
+
+    No cloud backend is registered at all, which is the shape `--pilot` is for:
+    real work, real hardware, and nothing that can spend the club's credits.
+    """
+    from gpu_broker.config import load_config
+
+    config = load_config(
+        state_dir,
+        overrides={
+            "reclaim_enabled": True,
+            "idle_window_minutes": 10.0,
+            "idle_grace_minutes": 15.0,
+            "idle_min_samples": 5,
+        },
+    )
+    instance = Broker.open(state_dir, clock=clock, backends=[lab_backend], config=config)
+    yield instance
+    instance.close()

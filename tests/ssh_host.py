@@ -53,6 +53,10 @@ class Unit:
     result: str = ""
     output: list[str] = field(default_factory=list)
     gpu_memory_used_mb: int = 0
+    pid: int = 0
+    """The process the job's cgroup contains. Utilization is attributed through
+    it, the same way the real probe attributes it."""
+    gpu_percent: float = 85.0
 
     @property
     def gpu_memory_limit_mb(self) -> int:
@@ -87,6 +91,8 @@ class FakeGpuHost:
         self.units: dict[str, Unit] = {}
         self.commands: list[str] = []
         self.mps_starts = 0
+        self.next_pid = 4100
+        self.pmon_works = True
 
     # ------------------------------------------------------ test controls
 
@@ -94,6 +100,10 @@ class FakeGpuHost:
         unit = self.units.get(UNIT_PREFIX + job_id)
         assert unit is not None, f"no unit for {job_id}. Have: {list(self.units)}"
         return unit
+
+    def set_utilization(self, job_id: str, percent: float) -> None:
+        """How busy this job's process is keeping the GPU."""
+        self.unit_for_job(job_id).gpu_percent = percent
 
     def emit(self, job_id: str, *lines: str) -> None:
         self.unit_for_job(job_id).output.extend(lines)
@@ -152,6 +162,9 @@ class FakeGpuHost:
 
         if command.startswith("printf '%s\\n' ok "):
             return 0, f"ok\n{self.home}\n", ""
+
+        if "###PIDS" in command:
+            return self._utilization(bare)
 
         if command.startswith("nvidia-smi --query-gpu"):
             if not self.nvidia_smi_works:
@@ -255,8 +268,38 @@ class FakeGpuHost:
             cpu_quota_percent=cpu,
             run_as=run_as,
             command=script,
+            pid=self.next_pid,
         )
+        self.next_pid += 1
         return 0, "", f"Running as unit: {unit_name}.service\n"
+
+    def _utilization(self, command: str) -> tuple[int, str, str]:
+        """Answer the per-process probe: cgroup PIDs, then pmon, then memory.
+
+        Per-process and not per-card on purpose. Under MPS two people share the
+        one A6000, so the card's own utilization cannot say whose job is busy,
+        and reclaiming on it would kill an idle job's working neighbour.
+        """
+        unit_name = _group(command, r"show (\S+) --property=ControlGroup") or ""
+        unit = self.units.get(unit_name)
+
+        pids = f"{unit.pid}\n" if unit is not None and unit.active else ""
+
+        # Every live job on the box shows up in nvidia-smi, not just this one.
+        # If the probe stopped filtering by cgroup it would pass against a
+        # single-job fixture and over-report the moment somebody else ran.
+        live = [u for u in self.units.values() if u.active and u.pid]
+        if self.nvidia_smi_works and self.pmon_works:
+            pmon = "# gpu        pid  type    sm   mem   enc   dec   command\n" + "".join(
+                f"    {u.gpu:d} {u.pid:10d}     C {u.gpu_percent:5.0f} "
+                f"{min(99, u.gpu_percent):5.0f}     -     -   python\n"
+                for u in live
+            )
+            mem = "".join(f"{u.pid}, {u.gpu_memory_used_mb or 4096}\n" for u in live)
+        else:
+            pmon, mem = "", ""
+
+        return 0, f"###PIDS\n{pids}###PMON\n{pmon}###MEM\n{mem}", ""
 
     def _status(self, command: str) -> tuple[int, str, str]:
         unit_name = _group(command, r"systemctl show (\S+) --property=ActiveState")
