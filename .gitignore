@@ -12,3 +12,8 @@ __pycache__/
 
 # Scratch state dir used by docs/_status_shot.py
 .status-shot/
+
+# Static export of the status page, and the host's link to its project
+site/
+.vercel/
+.env.local

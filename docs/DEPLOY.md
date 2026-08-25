@@ -396,6 +396,22 @@ Two things to decide before you publish the URL:
   a job sat idle for six hours, even anonymised. That effect is most of the
   value, and springing it on people is a bad way to get it.
 
+### Hosting the page where the broker does not run
+
+If the URL has to live somewhere that cannot run Python next to the database, a
+static host or a portfolio link, export the page instead of trying to deploy the
+app:
+
+```bash
+python docs/_status_export.py --out site --title "Your club GPU pool"
+```
+
+That writes one self-contained `index.html` plus `status.json`, which any static
+host will serve. It is a snapshot: it shows the pool as it was when the export
+ran and does not change until you run it again. Re-export on a cron if you want
+it to keep up. The genuinely live page is the `--only-public` unit above, which
+has to be on a machine that can read the database.
+
 ### Something to show before the club is on it
 
 An empty page convinces nobody, and made-up numbers are worse than an empty
