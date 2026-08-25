@@ -236,6 +236,7 @@ class Broker:
         hours: float,
         budget: Decimal | float | str | None = None,
         environment: str | None = None,
+        origin: str = "real",
     ) -> SubmitResult:
         """Admit a job, or refuse it with the number named.
 
@@ -274,6 +275,7 @@ class Broker:
                 currency=currency,
                 reserved=reserved,
                 reason=refusal.reason,
+                origin=origin,
             )
             return SubmitResult(job=job, refusal=refusal)
 
@@ -285,6 +287,7 @@ class Broker:
             currency=currency,
             reserved=reserved,
             environment=environment,
+            origin=origin,
         )
         return SubmitResult(
             job=job,

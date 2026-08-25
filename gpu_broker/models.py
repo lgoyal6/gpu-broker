@@ -72,6 +72,11 @@ class Job:
     environment: str | None = None
     """Named environment this job runs in. None means the machine as it comes."""
     cancel_requested: str | None = None
+
+    origin: str = "real"
+    """'real', 'pilot', or 'seeded'. See migration 009. This is a label, never a
+    filter the accounting relies on: pilot jobs spend real money and are counted
+    like any other."""
     """Who asked for this job to stop. Set by the web app, acted on by the
     scheduler daemon, because only the daemon can reach the machines."""
     """How many lines of this job's output the broker has already stored. The
