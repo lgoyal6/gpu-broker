@@ -42,6 +42,8 @@ admin_app = typer.Typer(no_args_is_help=True, help="Club admin: users and budget
 app.add_typer(admin_app, name="admin")
 env_app = typer.Typer(no_args_is_help=True, help="Named environments jobs can run in.")
 app.add_typer(env_app, name="env")
+demo_app = typer.Typer(no_args_is_help=True, help="Seeded demo data, in its own database.")
+app.add_typer(demo_app, name="demo")
 
 STATE_DIR_ENV = "GPU_BROKER_HOME"
 USER_ENV = "GPU_BROKER_USER"
@@ -54,6 +56,13 @@ def whoami(explicit: str | None = None) -> str:
 def open_broker(state_dir: str | None = None) -> Broker:
     root = state_dir or os.environ.get(STATE_DIR_ENV)
     return Broker.open(Path(root) if root else None, clock=SystemClock())
+
+
+def _default_state_dir(state_dir: str | None = None) -> Path:
+    from .config import DEFAULT_STATE_DIR
+
+    root = state_dir or os.environ.get(STATE_DIR_ENV)
+    return Path(root) if root else DEFAULT_STATE_DIR
 
 
 def die(message: str, hint: str | None = None) -> None:
@@ -1287,6 +1296,49 @@ def admin_users(
             "yes" if user.is_admin else "",
         )
     console.print(table)
+
+
+@demo_app.command("seed", help="Build a demo database so the status page has something on it.")
+def demo_seed(
+    directory: Annotated[
+        Optional[str],
+        typer.Option("--dir", help="Where to put it. Defaults to <state dir>/demo."),
+    ] = None,
+    days: Annotated[int, typer.Option("--days", help="How much history to generate.")] = 30,
+    overwrite: Annotated[bool, typer.Option("--overwrite", help="Redo an existing one.")] = False,
+    state_dir: Annotated[Optional[str], typer.Option("--state-dir", hidden=True)] = None,
+) -> None:
+    from .demo import seed
+
+    target = Path(directory) if directory else _default_state_dir(state_dir) / "demo"
+    try:
+        report = seed(target, days=days, overwrite=overwrite)
+    except RuntimeError as exc:
+        die(str(exc))
+
+    console.print(
+        f"[green]seeded[/green] {report.jobs} jobs from {report.users} people "
+        f"over {report.days} days"
+    )
+    console.print(f"[dim]{report.directory}[/dim]")
+    if report.missing_states:
+        # Reported rather than swallowed: the scenario is meant to be an
+        # integration fixture, so a state it never reaches is a fact about the
+        # broker worth knowing, not a detail to hide behind a green tick.
+        console.print(
+            f"[yellow]never reached: {', '.join(sorted(report.missing_states))}[/yellow]"
+        )
+    console.print(
+        "[dim]Serve it with: gpu web --state-dir "
+        f"{report.directory} --public[/dim]"
+    )
+
+
+@demo_app.command("path", help="Where the demo database would go.")
+def demo_path(
+    state_dir: Annotated[Optional[str], typer.Option("--state-dir", hidden=True)] = None,
+) -> None:
+    console.print(str(_default_state_dir(state_dir) / "demo"))
 
 
 def main() -> None:
