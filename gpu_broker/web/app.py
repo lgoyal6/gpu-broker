@@ -13,6 +13,7 @@ microseconds. Sharing one would be faster and wrong.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import datetime as dt
 import json
 from decimal import Decimal
@@ -60,9 +61,14 @@ def create_app(
     config: BrokerConfig | None = None,
     web: WebConfig | None = None,
     provider: IdentityProvider | None = None,
+    web_overrides: dict | None = None,
 ) -> FastAPI:
     config = config or load_config()
     web = web or config.web
+    if web_overrides:
+        # `gpu web --public` turning on the status page for one run, without
+        # editing the config file to do it.
+        web = dataclasses.replace(web, **web_overrides)
     web.validate()
 
     sessions = Sessions(web.resolved_session_secret(), web.session_max_age_seconds)
@@ -84,6 +90,21 @@ def create_app(
     templates.env.filters["sparkline"] = _sparkline
     app.state.templates = templates
     app.mount("/static", StaticFiles(directory=str(HERE / "static")), name="static")
+
+    if web.public_status:
+        # Mounted, not written inline: the public page lives in an app whose
+        # route table has no way to change anything. See web/publicapp.py.
+        from .publicapp import create_public_app
+
+        app.mount(
+            "/status",
+            create_public_app(
+                lambda: open_broker(config),
+                title=web.public_status_title,
+                cache_seconds=web.public_status_cache_seconds,
+            ),
+            name="status",
+        )
 
     # ------------------------------------------------------------ plumbing
 
