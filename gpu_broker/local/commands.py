@@ -170,6 +170,19 @@ def sudo(command: str, use_sudo: bool = True) -> str:
     return f"sudo -n {command}" if use_sudo else command
 
 
+def systemd(binary: str, use_sudo: bool) -> str:
+    """`sudo systemd-run` or `systemd-run --user`, never a bare one.
+
+    A shared research machine will not give anybody passwordless sudo, so the
+    user manager is the only way limits apply there at all. Without `--user` the
+    command talks to the *system* manager and is refused, which looks exactly
+    like "this host cannot enforce limits" and drains a host that was fine.
+    """
+    if use_sudo:
+        return f"sudo -n {binary}"
+    return f"{binary} --user"
+
+
 PROBE_MEMORY_BYTES = 67_108_864  # 64 MiB
 
 
@@ -181,11 +194,16 @@ def limit_probe(use_sudo: bool = True) -> str:
     on a host without the memory controller delegated it exits zero and applies
     nothing, and the first thing anyone would learn about it is a job taking the
     whole machine down.
+
+    The cgroup is located through `/proc/self/cgroup` rather than by reading
+    `/sys/fs/cgroup/memory.max` directly. That shorter path only resolves when
+    systemd puts the scope in its own cgroup namespace, which happens for a
+    system scope and not for a user one -- so the direct read reports "no such
+    file" on a perfectly healthy machine and drains it.
     """
-    return sudo(
-        "systemd-run --scope --quiet -p MemoryMax=64M -- "
-        "cat /sys/fs/cgroup/memory.max",
-        use_sudo,
+    return (
+        f"{systemd('systemd-run', use_sudo)} --scope --quiet -p MemoryMax=64M -- "
+        "sh -c 'cat /sys/fs/cgroup$(cut -d: -f3 /proc/self/cgroup)/memory.max'"
     )
 
 
@@ -243,19 +261,21 @@ def launch(
     settings = " ".join(
         f"--setenv={key}={shlex.quote(value)}" for key, value in sorted(env.items())
     )
-    return sudo(
-        f"systemd-run --unit={unit} --service-type=exec "
+    # `--uid` only makes sense when sudo is creating the unit as root. In user
+    # mode the unit already runs as you, and passing it is an error.
+    as_user = f"--uid={shlex.quote(run_as)} " if use_sudo else ""
+    return (
+        f"{systemd('systemd-run', use_sudo)} --unit={unit} --service-type=exec "
         f"--property=MemoryMax={memory_max_mb}M "
         f"--property=MemorySwapMax=0 "
         f"--property=CPUQuota={cpu_quota_percent}% "
-        f"--uid={shlex.quote(run_as)} "
+        f"{as_user}"
         f"{settings} "
-        f"/bin/bash -lc {shlex.quote(inner)}",
-        use_sudo,
+        f"/bin/bash -lc {shlex.quote(inner)}"
     )
 
 
-def unit_status(unit: str, directory: str) -> str:
+def unit_status(unit: str, directory: str, use_sudo: bool = True) -> str:
     """One round trip for both halves of 'is it done, and how did it go'.
 
     The exit file is the authority. The unit's own state is a fallback for the
@@ -263,7 +283,7 @@ def unit_status(unit: str, directory: str) -> str:
     """
     return (
         f"printf 'exitfile=%s\\n' \"$(cat {shlex.quote(directory)}/exit 2>/dev/null)\"; "
-        f"systemctl show {unit} --property=ActiveState --property=SubState "
+        f"{_systemctl(use_sudo)} show {unit} --property=ActiveState --property=SubState "
         f"--property=Result --property=ExecMainStatus 2>/dev/null || true"
     )
 
@@ -307,8 +327,11 @@ def parse_unit_status(stdout: str) -> UnitStatus:
     )
 
 
-def verify_limits(unit: str) -> str:
-    return f"systemctl show {unit} --property=MemoryMax --property=CPUQuotaPerSecUSec"
+def verify_limits(unit: str, use_sudo: bool = True) -> str:
+    return (
+        f"{_systemctl(use_sudo)} show {unit} "
+        "--property=MemoryMax --property=CPUQuotaPerSecUSec"
+    )
 
 
 def tail_output(directory: str, after: int) -> str:
@@ -316,7 +339,7 @@ def tail_output(directory: str, after: int) -> str:
     return f"tail -n +{after + 1} {shlex.quote(directory)}/output.log 2>/dev/null || true"
 
 
-def utilization(unit: str) -> str:
+def utilization(unit: str, use_sudo: bool = True) -> str:
     """What this job's processes are doing to the GPU, in one round trip.
 
     Per-process, not per-card. Under MPS two users share one A6000, so the
@@ -329,7 +352,7 @@ def utilization(unit: str) -> str:
     """
     return (
         "printf '###PIDS\n'; "
-        f"cg=$(systemctl show {unit} --property=ControlGroup --value 2>/dev/null); "
+        f"cg=$({_systemctl(use_sudo)} show {unit} --property=ControlGroup --value 2>/dev/null); "
         '[ -n "$cg" ] && cat "/sys/fs/cgroup$cg/cgroup.procs" 2>/dev/null; '
         "printf '###PMON\n'; "
         "nvidia-smi pmon -c 1 -s u 2>/dev/null || true; "
@@ -400,18 +423,21 @@ def _percent(raw: str) -> float:
 def stop_unit(unit: str, use_sudo: bool = True) -> str:
     """Stop, then clear. Without `reset-failed`, a unit that exited non-zero
     stays in the failed state and the name cannot be reused."""
+    manager = _systemctl(use_sudo)
     return (
-        sudo(f"systemctl stop {unit}", use_sudo)
-        + " >/dev/null 2>&1; "
-        + sudo(f"systemctl reset-failed {unit}", use_sudo)
-        + " >/dev/null 2>&1; true"
+        f"{manager} stop {unit} >/dev/null 2>&1; "
+        f"{manager} reset-failed {unit} >/dev/null 2>&1; true"
     )
 
 
+def _systemctl(use_sudo: bool) -> str:
+    return "sudo -n systemctl" if use_sudo else "systemctl --user"
+
+
 def list_units(use_sudo: bool = False) -> str:
-    return sudo(
-        f"systemctl list-units '{UNIT_PREFIX}*' --all --no-legend --plain --no-pager",
-        use_sudo,
+    return (
+        f"{_systemctl(use_sudo)} list-units '{UNIT_PREFIX}*' "
+        "--all --no-legend --plain --no-pager"
     )
 
 
@@ -424,7 +450,7 @@ def parse_units(stdout: str) -> list[str]:
     return units
 
 
-def list_live_jobs(root: str) -> str:
+def list_live_jobs(root: str, use_sudo: bool = True) -> str:
     """Every job directory whose unit is still active, with its metadata.
 
     One round trip. A directory whose unit has gone is finished work, not a
@@ -435,7 +461,7 @@ def list_live_jobs(root: str) -> str:
         f"for d in {shlex.quote(root)}/*/; do "
         f'[ -d "$d" ] || continue; '
         f'id=$(basename "$d"); '
-        f'if systemctl is-active --quiet {UNIT_PREFIX}$id 2>/dev/null; then '
+        f'if {_systemctl(use_sudo)} is-active --quiet {UNIT_PREFIX}$id 2>/dev/null; then '
         f'printf "### %s\n" "$id"; cat "$d/meta" 2>/dev/null; '
         f"fi; done"
     )

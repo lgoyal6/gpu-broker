@@ -143,7 +143,7 @@ class LocalBackend:
         try:
             result = self.transport.run(
                 host,
-                commands.list_live_jobs(self._root_for(hostname)),
+                commands.list_live_jobs(self._root_for(hostname), self.config.use_sudo),
                 timeout=self.config.command_timeout_seconds,
             )
         except BackendError:
@@ -335,6 +335,7 @@ class LocalBackend:
                 commands.unit_status(
                     commands.unit_for(job_id),
                     commands.job_dir(self._root_for(hostname), job_id),
+                    self.config.use_sudo,
                 ),
                 timeout=self.config.poll_timeout_seconds,
             )
@@ -415,7 +416,7 @@ class LocalBackend:
         try:
             result = self.transport.run(
                 host,
-                commands.utilization(commands.unit_for(job_id)),
+                commands.utilization(commands.unit_for(job_id), self.config.use_sudo),
                 timeout=self.config.poll_timeout_seconds,
             )
         except BackendError:
