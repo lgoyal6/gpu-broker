@@ -301,6 +301,12 @@ default precisely so two jobs can have different limits.
 MPS caps GPU memory and nothing else; a dataloader can still OOM the machine and
 take every other job with it.
 
+**Limits come from whichever systemd manager is reachable.** With passwordless
+sudo the broker creates a system unit and passes `--uid`; without it, it uses the
+user manager, where recent systemd delegates `memory` and `cpu` to the user slice
+anyway. A shared research machine will not hand out sudo, so the user path is not
+a fallback, it is the normal one.
+
 **A host that cannot enforce limits is drained.** `systemd-run` exits zero on a
 machine where the memory controller is not delegated, and applies nothing - so
 the health check runs a throwaway scope with a known cap and reads its own cgroup

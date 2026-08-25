@@ -230,8 +230,11 @@ def check_host(
                 f"cgroup limits do not take effect here (asked for "
                 f"{PROBE_MEMORY_BYTES} bytes, the scope reported {applied}): {why}. "
                 "Without them one job can take the whole machine down, so no new "
-                "jobs will be placed here. Give the SSH user passwordless sudo "
-                "for systemd-run"
+                "jobs will be placed here. Either give the SSH user passwordless "
+                "sudo for systemd-run, or set local.use_sudo to false to use the "
+                "user manager instead -- on a shared research box you will not "
+                "get sudo, and the user slice usually has memory and cpu "
+                "delegated anyway"
             ),
             gpus=gpus,
             limits_tested=True,

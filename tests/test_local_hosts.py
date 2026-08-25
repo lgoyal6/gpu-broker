@@ -117,7 +117,10 @@ def test_no_sudo_drains_the_host(transport, gpu_host, local_config, clock):
 def test_the_probe_verifies_by_reading_the_cgroup_back(transport, gpu_host, local_config, clock):
     """Not by trusting the exit code."""
     health_of(transport, gpu_host, local_config, clock)
-    assert any("cat /sys/fs/cgroup/memory.max" in command for command in gpu_host.commands)
+    assert any(
+        "/proc/self/cgroup" in command and "memory.max" in command
+        for command in gpu_host.commands
+    )
 
 
 # --------------------------------------------------------------------- MPS
@@ -167,3 +170,61 @@ def test_duplicate_hosts_are_refused():
 def test_a_pool_that_could_never_run_anything_is_refused():
     with pytest.raises(ConfigError, match="max_jobs_per_gpu"):
         LocalConfig(max_jobs_per_gpu=0).validate()
+
+
+# ------------------------------------------- the user manager (no sudo path)
+
+
+def test_the_probe_finds_its_cgroup_through_proc_not_a_fixed_path():
+    """Regression, found on a real shared box. `/sys/fs/cgroup/memory.max` only
+    resolves when systemd puts the scope in its own cgroup namespace, which it
+    does for a system scope and not for a user one. The direct read returns
+    "no such file" on a perfectly healthy machine and drains it."""
+    from gpu_broker.local.commands import limit_probe
+
+    for probe in (limit_probe(True), limit_probe(False)):
+        assert "/proc/self/cgroup" in probe
+        assert "-- cat /sys/fs/cgroup/memory.max" not in probe
+
+
+def test_without_sudo_every_call_goes_to_the_user_manager():
+    """A shared research machine will not hand out passwordless sudo. Without
+    `--user` these talk to the system manager, get refused, and look exactly
+    like a host that cannot enforce limits."""
+    from gpu_broker.local import commands
+
+    assert "systemd-run --user" in commands.limit_probe(False)
+    assert "systemctl --user" in commands.stop_unit("gpu-broker-x", False)
+    assert "systemctl --user" in commands.unit_status("gpu-broker-x", "/d", False)
+    assert "systemctl --user" in commands.utilization("gpu-broker-x", False)
+    assert "systemctl --user" in commands.list_live_jobs("/root", False)
+    assert "systemctl --user" in commands.list_units(False)
+
+
+def test_with_sudo_nothing_is_addressed_to_the_user_manager():
+    from gpu_broker.local import commands
+
+    assert "--user" not in commands.limit_probe(True)
+    assert "sudo -n systemctl" in commands.stop_unit("gpu-broker-x", True)
+
+
+def test_uid_is_only_passed_when_sudo_creates_the_unit():
+    """In user mode the unit already runs as you, and `--uid` is an error."""
+    from gpu_broker.local import commands
+
+    kwargs = dict(
+        unit="gpu-broker-x", directory="/d", working_dir="/w", command="python t.py",
+        env={}, memory_max_mb=1024, cpu_quota_percent=100, run_as="broker",
+        meta=commands.meta_lines("x", "ana", "2026", 0),
+    )
+    assert "--uid=broker" in commands.launch(**kwargs, use_sudo=True)
+    assert "--uid" not in commands.launch(**kwargs, use_sudo=False)
+
+
+def test_a_host_without_sudo_is_told_about_the_user_manager(
+    transport, gpu_host, local_config, clock
+):
+    """Rather than only being told to get sudo it is never going to get."""
+    gpu_host.sudo_works = False
+    health = check_host(transport, gpu_host.server.spec(), local_config, clock.now())
+    assert "use_sudo to false" in health.reason

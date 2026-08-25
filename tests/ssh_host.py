@@ -137,10 +137,18 @@ class FakeGpuHost:
 
     def handle(self, command: str) -> tuple[int, str, str]:
         self.commands.append(command)
+        command = command.replace("systemctl --user ", "systemctl ").replace(
+            "systemd-run --user ", "systemd-run "
+        )
 
         if command.startswith("sudo -n ") and not self.sudo_works:
             return 1, "", "sudo: a password is required\n"
         bare = command.removeprefix("sudo -n ")
+        # The user manager is the same manager as far as this simulator is
+        # concerned; what matters is that the broker addressed one of them.
+        bare = bare.replace("systemctl --user ", "systemctl ").replace(
+            "systemd-run --user ", "systemd-run "
+        )
 
         if command.startswith("printf '%s\\n' ok "):
             return 0, f"ok\n{self.home}\n", ""
@@ -154,7 +162,7 @@ class FakeGpuHost:
             )
             return 0, rows + "\n", ""
 
-        if "cat /sys/fs/cgroup/memory.max" in bare:
+        if "/proc/self/cgroup" in bare and "memory.max" in bare:
             # The limit probe. `systemd-run` exits zero either way; what
             # differs is whether the scope actually got the cap.
             return 0, ("67108864\n" if self.limits_apply else "max\n"), ""

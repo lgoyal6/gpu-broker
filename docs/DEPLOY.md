@@ -164,27 +164,58 @@ is pinned to on-demand automatically.
 
 ## 4. The lab machine
 
-Give the broker's SSH user passwordless sudo for exactly two binaries:
+Two ways to get cgroup limits, and on a shared research box only one of them is
+available to you.
+
+### If you have root, or can get a sudoers line
 
 ```
 # /etc/sudoers.d/gpu-broker
 broker ALL=(root) NOPASSWD: /usr/bin/systemd-run, /usr/bin/systemctl
 ```
 
-The job itself does **not** run as root - the broker sudoes to *create* the unit
+On NixOS the paths are under `/run/current-system/sw/bin/`, not `/usr/bin/`.
+Check with `command -v systemd-run` before writing the line.
+
+The job itself does **not** run as root: the broker sudoes to *create* the unit
 and passes `--uid`, so training scripts run as the ordinary SSH user.
 
-Make sure the GPU is not in `Prohibited` compute mode (MPS cannot open it):
+### If you do not, which is the normal case on a shared box
+
+```json
+{ "local": { "use_sudo": false } }
+```
+
+The broker then talks to your **user** systemd manager instead. On any recent
+systemd the user slice has `memory` and `cpu` delegated, so the limits are real:
 
 ```bash
-sudo nvidia-smi -i 0 -c DEFAULT
+cat /sys/fs/cgroup/user.slice/user-$(id -u).slice/cgroup.controllers
+# cpu io memory pids
+```
+
+`gpu doctor` and `gpu hosts` verify this for you rather than assuming it. The
+health check runs a throwaway scope with a known cap and reads the cgroup back
+through `/proc/self/cgroup`; if the number does not come back exactly, the host
+is drained and told why.
+
+What you give up: nothing enforces limits on *other* people's processes. Your
+jobs are capped against each other, not against whoever else is on the machine.
+
+### Either way
+
+MPS cannot open a card in `Prohibited` compute mode:
+
+```bash
+nvidia-smi -i 0 -q | grep "Compute Mode"     # want Default or Exclusive_Process
 ```
 
 ```json
 {
   "backends": ["local"],
   "local": {
-    "hosts": [{ "hostname": "lab1.ucsd.edu", "username": "broker" }],
+    "hosts": [{ "hostname": "lab.example.edu", "username": "you" }],
+    "use_sudo": false,
     "max_jobs_per_gpu": 2
   }
 }
@@ -194,12 +225,23 @@ sudo nvidia-smi -i 0 -c DEFAULT
 gpu hosts    # HEALTHY, with limits "yes"
 ```
 
-If `limits` shows **NO**, the host is drained and says why. That check is not
-cosmetic: `systemd-run` exits zero on a machine where the memory controller is
-not delegated and applies nothing, so the broker verifies by running a throwaway
-scope with a known cap and reading its own cgroup back.
+### Before you point it at a machine other people use
 
----
+The broker dispatches on its own. That is the point of it, and it is also the
+thing to think about twice on a box somebody else is working on:
+
+- **It will take the card without telling anyone.** If your lab expects a heads
+  up before somebody occupies the GPU, the broker does not give one. Either keep
+  the host drained until you have announced a window, or lower
+  `max_jobs_per_gpu` and `default_gpu_memory_mb` so the broker only ever uses a
+  slice and leaves the rest free.
+- **MPS is a machine-wide daemon.** Starting it changes how the card behaves for
+  every process, not only yours. In user mode it runs under your own pipe
+  directory and only multiplexes your jobs, but it is still a change to a shared
+  machine.
+- **Its memory limits bound your jobs against each other, not against theirs.**
+  Somebody else can still take 44 GB of a 48 GB card, and your jobs will fail to
+  allocate. `gpu hosts` shows what is free; it cannot reserve it.
 
 ## 5. Persistent data
 
