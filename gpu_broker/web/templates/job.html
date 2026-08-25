@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}{{ job.short_id }} &middot; gpu-broker{% endblock %}
+{% block body %}
+<h1><span class="mono">{{ job.short_id }}</span>
+  <span class="state s-{{ job.state.value }}">{{ job.state.value }}</span></h1>
+<p class="sub mono">{{ job.command }}</p>
+
+<div class="cards">
+  <div class="panel card"><div class="k">who</div><div class="v">{{ job.user_id }}</div>
+    <div class="n">{{ job.gpu_type }} for {{ job.requested_hours }}h</div></div>
+  <div class="panel card"><div class="k">spent</div>
+    <div class="v">{{ spent | money(job.currency) }}</div>
+    <div class="n">of {{ job.reserved | money(job.currency) }} ceiling</div></div>
+  <div class="panel card"><div class="k">gpu, peak</div>
+    <div class="v">{% if peak is not none %}{{ "%.0f"|format(peak) }}%{% else %}&mdash;{% endif %}</div>
+    <div class="n">{{ samples | length }} samples</div></div>
+  {% if job.preemptions %}
+  <div class="panel card"><div class="k">preempted</div><div class="v">{{ job.preemptions }}&times;</div>
+    <div class="n">{% if job.checkpoint_step is not none %}resuming from step {{ job.checkpoint_step }}{% else %}nothing saved{% endif %}</div></div>
+  {% endif %}
+</div>
+
+{% if job.refusal_reason %}<div class="note bad">{{ job.refusal_reason }}</div>{% endif %}
+{% if job.pinned_tier %}
+<div class="note">Pinned to <strong>{{ job.pinned_tier }}</strong> capacity: it was preempted
+  repeatedly without saving a checkpoint, and redoing the same hour costs more than
+  on&#8209;demand would have.</div>
+{% endif %}
+{% if job.cancel_requested %}
+<div class="note">Cancel requested by {{ job.cancel_requested }}. The scheduler stops the
+  machine on its next pass &mdash; this page cannot reach it.</div>
+{% endif %}
+{% for n in notices %}<div class="note">{{ n.message }}</div>{% endfor %}
+
+{% if mine and not job.is_terminal and not job.cancel_requested %}
+<form method="post" action="/jobs/{{ job.job_id }}/cancel" style="margin:.8rem 0">
+  <button class="quiet" type="submit">cancel this job</button>
+  <span class="dim">unspent budget comes back to you</span>
+</form>
+{% endif %}
+
+<h2>Output <span class="dim" id="stream-status">{{ "live" if not job.is_terminal else "" }}</span></h2>
+<div id="logs" data-stream="/jobs/{{ job.job_id }}/stream"
+     data-after="{{ logs[-1][0] if logs else 0 }}">{% for id, at, stream, line in logs %}<div class="{{ stream }}"><span class="t">{{ at.strftime('%H:%M:%S') }}</span> {{ line }}</div>{% endfor %}</div>
+
+{% if samples %}
+<h2>GPU utilization</h2>
+<div class="panel">
+  {% for s in samples[-24:] %}
+  <div style="display:flex;gap:.6rem;align-items:center;margin:.15rem 0">
+    <span class="dim mono" style="width:5rem">{{ s.at.strftime('%H:%M:%S') }}</span>
+    <div class="bar {{ 'low' if s.gpu_percent < 5 else '' }}" style="flex:1"><i style="width: {{ s.gpu_percent }}%"></i></div>
+    <span class="dim mono" style="width:3rem;text-align:right">{{ "%.0f"|format(s.gpu_percent) }}%</span>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+<h2>History</h2>
+<div class="panel">
+<table>
+  {% for from_state, to_state, at, reason in history %}
+  <tr>
+    <td class="dim mono" style="width:11rem">{{ at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+    <td style="width:14rem">{% if from_state %}<span class="dim">{{ from_state }} &rarr;</span> {% endif %}{{ to_state }}</td>
+    <td class="dim">{{ reason or "" }}</td>
+  </tr>
+  {% endfor %}
+</table>
+</div>
+{% endblock %}
+{% block scripts %}<script src="/static/logs.js"></script>{% endblock %}

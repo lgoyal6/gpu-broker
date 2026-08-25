@@ -1,0 +1,61 @@
+/* One stylesheet, no framework. A club member should be able to change a colour
+   without learning a build system. */
+:root {
+  --ink: #16181d; --dim: #6b7280; --line: #e3e6ea; --bg: #fbfbfc; --panel: #fff;
+  --ok: #157f3d; --warn: #a1620a; --bad: #b3261e; --busy: #1a5fb4; --idle: #7a1fa2;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink);
+  font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+a { color: var(--busy); }
+header { background: var(--panel); border-bottom: 1px solid var(--line); padding: .6rem 1.2rem;
+  display: flex; gap: 1.2rem; align-items: center; flex-wrap: wrap; }
+header .brand { font-weight: 650; letter-spacing: -.01em; }
+header nav { display: flex; gap: 1rem; flex: 1; }
+header .me { color: var(--dim); font-size: .9em; }
+main { max-width: 1100px; margin: 0 auto; padding: 1.4rem 1.2rem 4rem; }
+h1 { font-size: 1.3rem; margin: 0 0 .2rem; letter-spacing: -.01em; }
+h2 { font-size: 1rem; margin: 2rem 0 .6rem; }
+.sub { color: var(--dim); margin: 0 0 1.2rem; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+  padding: 1rem 1.1rem; margin-bottom: 1rem; }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: .8rem; }
+.card .k { color: var(--dim); font-size: .82em; text-transform: uppercase; letter-spacing: .04em; }
+.card .v { font-size: 1.5rem; font-variant-numeric: tabular-nums; }
+.card .n { color: var(--dim); font-size: .85em; }
+table { width: 100%; border-collapse: collapse; font-size: .93em; }
+th { text-align: left; color: var(--dim); font-weight: 500; font-size: .82em;
+  text-transform: uppercase; letter-spacing: .04em; padding: .4rem .6rem; }
+td { padding: .45rem .6rem; border-top: 1px solid var(--line); vertical-align: top; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .92em; }
+.state { font-size: .78em; padding: .1rem .45rem; border-radius: 4px; border: 1px solid; }
+.s-RUNNING, .s-ALLOCATING, .s-RESUMING { color: var(--busy); border-color: var(--busy); }
+.s-COMPLETED { color: var(--ok); border-color: var(--ok); }
+.s-FAILED, .s-REFUSED, .s-RECLAIMED { color: var(--bad); border-color: var(--bad); }
+.s-CANCELLED, .s-PREEMPTED { color: var(--warn); border-color: var(--warn); }
+.s-QUEUED { color: var(--dim); border-color: var(--line); }
+.meter { display: inline-flex; align-items: center; gap: .5rem; white-space: nowrap; }
+.bar { display: inline-block; background: var(--line); border-radius: 3px; height: 6px;
+  overflow: hidden; width: 72px; vertical-align: middle; }
+.bar > i { display: block; height: 100%; background: var(--busy); }
+.bar.low > i { background: var(--idle); }
+form label { display: block; margin: .8rem 0 .2rem; font-size: .9em; color: var(--dim); }
+input, select, textarea, button { font: inherit; padding: .45rem .6rem;
+  border: 1px solid var(--line); border-radius: 6px; background: #fff; color: inherit; }
+textarea { width: 100%; font-family: ui-monospace, Menlo, monospace; }
+button { background: var(--ink); color: #fff; border-color: var(--ink); cursor: pointer; }
+button.quiet { background: #fff; color: var(--bad); border-color: var(--line); }
+.row { display: flex; gap: .8rem; flex-wrap: wrap; align-items: end; }
+.note { border-left: 3px solid var(--warn); padding: .5rem .8rem; background: #fffaf0;
+  border-radius: 0 6px 6px 0; margin: .6rem 0; }
+.note.bad { border-color: var(--bad); background: #fef4f3; }
+.note.ok { border-color: var(--ok); background: #f2fbf5; }
+#logs { background: #14161a; color: #dfe3e8; border-radius: 8px; padding: .8rem 1rem;
+  font-family: ui-monospace, Menlo, monospace; font-size: .85em; line-height: 1.55;
+  max-height: 30rem; overflow-y: auto; white-space: pre-wrap; word-break: break-word; }
+#logs .t { color: #6d7681; }
+#logs .stderr { color: #ff9d94; }
+#logs .broker { color: #8ea7c9; }
+.dim { color: var(--dim); }
+.empty { color: var(--dim); padding: 1.2rem 0; }

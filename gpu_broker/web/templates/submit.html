@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block title %}submit &middot; gpu-broker{% endblock %}
+{% block body %}
+<h1>Submit a job</h1>
+<p class="sub">Paste the command you would run on the machine.</p>
+
+{% if refusal %}<div class="note bad">{{ refusal }}</div>{% endif %}
+{% if error %}<div class="note bad">{{ error }}</div>{% endif %}
+
+<form method="post" action="/submit" class="panel">
+  <label for="command">command</label>
+  <textarea id="command" name="command" rows="3" required
+    placeholder="python train.py --epochs 10">{{ command or "" }}</textarea>
+
+  <div class="row">
+    <div>
+      <label for="gpu">gpu</label>
+      <select id="gpu" name="gpu">
+        {% for g in gpus %}
+        <option value="{{ g.name }}" {% if g.name == gpu %}selected{% endif %}>
+          {{ g.name }} &mdash; {{ g.description }}
+          &mdash; {% if g.currency.value == "USD" %}{{ prices[g.name].hourly | money }}/h{% else %}free{% endif %}
+        </option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label for="environment">environment</label>
+      <select id="environment" name="environment">
+        <option value="">the machine as it comes</option>
+        {% for e in environments or [] %}
+        <option value="{{ e.name }}" {% if e.name == environment %}selected{% endif %}>
+          {{ e.name }} &mdash; {{ e.requirements | length }} package{{ '' if e.requirements|length == 1 else 's' }}
+        </option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label for="hours">hours</label>
+      <input id="hours" name="hours" type="number" step="0.25" min="0.25"
+             value="{{ hours or 1 }}" style="width:7rem">
+    </div>
+    <div>
+      <label for="budget">budget ceiling <span class="dim">(optional)</span></label>
+      <input id="budget" name="budget" placeholder="auto" value="{{ budget or '' }}" style="width:8rem">
+    </div>
+    <div><button type="submit">queue it</button></div>
+  </div>
+</form>
+
+<div class="panel">
+  <h2 style="margin-top:0">What you have left this month</h2>
+  <table>
+    {% for currency, b in balances.items() %}
+    <tr>
+      <td>{{ "dollars" if currency.value == "USD" else "free gpu-hours" }}</td>
+      <td class="num">{{ b.available | money(currency) }} left</td>
+      <td class="num dim">{{ b.spent | money(currency) }} spent, {{ b.held | money(currency) }} held</td>
+    </tr>
+    {% endfor %}
+  </table>
+  <p class="dim" style="margin-bottom:0">
+    Leaving the ceiling blank reserves what your hours cost, plus
+    {{ allowance }}h for the machine to boot &mdash; you pay for that too.
+    A job that reaches its ceiling is stopped.
+  </p>
+</div>
+
+<div class="panel">
+  <h2 style="margin-top:0">If your job fails because a package is missing</h2>
+  <p class="dim" style="margin:0">
+    That is the commonest reason a job dies here. Make a named environment once and
+    everybody who picks it gets the same packages:
+  </p>
+  <pre class="mono" style="background:#f4f5f7;padding:.7rem;border-radius:6px;overflow-x:auto">gpu env create vision -r requirements.txt</pre>
+  <p class="dim" style="margin:0">
+    The first job that uses it builds it; every job after that reuses the build.
+    Your data lives in <code>/data</code> and survives between jobs, so a dataset
+    is downloaded once.
+  </p>
+</div>
+
+<div class="panel">
+  <h2 style="margin-top:0">Make it survivable</h2>
+  <p class="dim" style="margin:0">
+    Jobs can land on spot capacity, which can be taken back with two minutes' notice.
+    If your script checkpoints, it resumes where it stopped; if it does not, it starts
+    over. Add four lines and it will not lose work:
+  </p>
+  <pre class="mono" style="background:#f4f5f7;padding:.7rem;border-radius:6px;overflow-x:auto">from gpu_broker.adapters import Checkpointer
+
+ckpt = Checkpointer(model, optimizer, every=500)
+start = ckpt.resume()
+for step in range(start, total):
+    train_one_step()
+    if ckpt.step(step): break</pre>
+</div>
+{% endblock %}
