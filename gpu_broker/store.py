@@ -156,6 +156,7 @@ class Store:
         reserved: Decimal,
         job_id: str | None = None,
         environment: str | None = None,
+        origin: str = "real",
     ) -> Job:
         """Admit a job: queue row, first transition, and the budget hold, atomically.
 
@@ -176,6 +177,7 @@ class Store:
             submitted_at=now,
             updated_at=now,
             environment=environment,
+            origin=origin,
         )
         with transaction(self.conn) as conn:
             self._insert_job(conn, job)
@@ -203,6 +205,7 @@ class Store:
         currency: Currency,
         reserved: Decimal,
         reason: str,
+        origin: str = "real",
     ) -> Job:
         """Persist a submission we would not accept.
 
@@ -223,6 +226,7 @@ class Store:
             updated_at=now,
             finished_at=now,
             refusal_reason=reason,
+            origin=origin,
         )
         with transaction(self.conn) as conn:
             self._insert_job(conn, job)
@@ -938,8 +942,9 @@ class Store:
         conn.execute(
             "INSERT INTO jobs (job_id, user_id, command, gpu_type, requested_hours, "
             "currency, reserved, state, backend, backend_handle, submitted_at, "
-            "started_at, finished_at, exit_code, refusal_reason, updated_at, environment) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "started_at, finished_at, exit_code, refusal_reason, updated_at, environment, "
+            "origin) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 job.job_id,
                 job.user_id,
@@ -958,6 +963,7 @@ class Store:
                 job.refusal_reason,
                 to_iso(job.updated_at),
                 job.environment,
+                job.origin,
             ),
         )
 
@@ -1042,6 +1048,7 @@ def _job_from_row(row: sqlite3.Row) -> Job:
         checkpoint_at=from_iso(row["checkpoint_at"]) if row["checkpoint_at"] else None,
         cancel_requested=row["cancel_requested"],
         environment=row["environment"],
+        origin=row["origin"],
     )
 
 
