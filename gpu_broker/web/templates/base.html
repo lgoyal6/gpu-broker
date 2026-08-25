@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}gpu-broker{% endblock %}</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header>
+  <span class="brand">gpu&#8209;broker</span>
+  {% if viewer %}
+  <nav>
+    <a href="/">pool</a>
+    <a href="/jobs">my jobs</a>
+    <a href="/submit">submit</a>
+    <a href="/report">report</a>
+    {% if is_admin %}<a href="/admin">admin</a>{% endif %}
+  </nav>
+  <span class="me">{{ viewer.display }} &middot; <a href="/auth/logout">sign out</a></span>
+  {% endif %}
+</header>
+<main>{% block body %}{% endblock %}</main>
+{% block scripts %}{% endblock %}
+</body>
+</html>

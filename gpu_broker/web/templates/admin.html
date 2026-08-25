@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}admin &middot; gpu-broker{% endblock %}
+{% block body %}
+<h1>Club admin</h1>
+<p class="sub">Budgets and machines.</p>
+
+<h2>Pool</h2>
+<div class="panel">
+<table>
+  <tr><th>currency</th><th class="num">spent</th><th class="num">held</th><th class="num">cap</th></tr>
+  {% for currency, b in pool.items() %}
+  <tr>
+    <td>{{ "dollars" if currency.value == "USD" else "free gpu-hours" }}</td>
+    <td class="num">{{ b.spent | money(currency) }}</td>
+    <td class="num">{{ b.held | money(currency) }}</td>
+    <td class="num">{{ b.budget | money(currency) }}</td>
+  </tr>
+  {% endfor %}
+</table>
+</div>
+
+<h2>Members</h2>
+<div class="panel">
+<table>
+  <tr><th>who</th><th class="num">dollars left</th><th class="num">gpu-hours left</th><th>set budget</th></tr>
+  {% for row in users %}
+  <tr>
+    <td>{{ row.user.user_id }}</td>
+    <td class="num">{{ row.balances[row.balances.keys()|list|first].available | money }}</td>
+    <td class="num">{{ row.balances[row.balances.keys()|list|last].available | money(row.balances.keys()|list|last) }}</td>
+    <td>
+      <form method="post" action="/admin/budget" class="row" style="gap:.4rem">
+        <input type="hidden" name="user_id" value="{{ row.user.user_id }}">
+        <input name="usd" placeholder="$" style="width:6rem" aria-label="dollars for {{ row.user.user_id }}">
+        <input name="gpu_hours" placeholder="gpu-hr" style="width:6rem" aria-label="gpu-hours for {{ row.user.user_id }}">
+        <button type="submit">set</button>
+      </form>
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+</div>
+
+<h2>Lab machines</h2>
+<div class="panel">
+{% if hosts %}
+<table>
+  <tr><th>host</th><th>state</th><th>why</th><th></th></tr>
+  {% for h in hosts %}
+  <tr>
+    <td class="mono">{{ h.hostname }}</td>
+    <td><span class="state s-{{ 'RUNNING' if h.state.accepts_jobs else 'CANCELLED' }}">{{ h.state.value }}</span></td>
+    <td class="dim">{{ h.reason }}</td>
+    <td>
+      <form method="post" action="/admin/hosts/{{ h.hostname }}/drain" class="row" style="gap:.4rem">
+        {% if h.state.accepts_jobs %}
+        <input name="reason" placeholder="why" style="width:10rem" aria-label="reason">
+        <button class="quiet" type="submit">drain</button>
+        {% else %}
+        <input type="hidden" name="undrain" value="1">
+        <button type="submit">put back</button>
+        {% endif %}
+      </form>
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+<p class="dim" style="margin-bottom:0">A drained host keeps running whatever is already
+  on it. It just stops taking new work.</p>
+{% else %}<p class="empty">No local pool configured.</p>{% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+*.egg-info/
+*.sqlite3
+*.sqlite3-*
+.broker/
+
+# demo scratch
+/tmp/gpu-broker-demo/

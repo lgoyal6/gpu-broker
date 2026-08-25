@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}jobs &middot; gpu-broker{% endblock %}
+{% block body %}
+<h1>{{ "All jobs" if everyone else "Your jobs" }}</h1>
+<p class="sub">
+  {% if everyone %}<a href="/jobs">just mine</a>{% else %}<a href="/jobs?everyone=true">everyone's</a>{% endif %}
+</p>
+<div class="panel">
+{% if jobs %}
+<table>
+  <tr><th>job</th>{% if everyone %}<th>who</th>{% endif %}<th>gpu</th><th>state</th>
+      <th class="num">cost</th><th class="num">peak gpu</th><th>command</th><th class="num">when</th></tr>
+  {% for row in jobs %}
+  <tr>
+    <td><a class="mono" href="/jobs/{{ row.job.job_id }}">{{ row.job.short_id }}</a></td>
+    {% if everyone %}<td>{{ row.job.user_id }}</td>{% endif %}
+    <td>{{ row.job.gpu_type }}</td>
+    <td>
+      <span class="state s-{{ row.job.state.value }}">{{ row.job.state.value }}</span>
+      {% if row.job.preemptions %}<span class="dim" title="preempted and resumed">&times;{{ row.job.preemptions }}</span>{% endif %}
+    </td>
+    <td class="num">{{ row.spent | money(row.job.currency) }}</td>
+    <td class="num">{% if row.utilization is not none %}{{ "%.0f"|format(row.utilization) }}%{% else %}<span class="dim">-</span>{% endif %}</td>
+    <td class="mono" style="max-width:22rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ row.job.command }}</td>
+    <td class="num dim">{{ row.job.submitted_at | ago }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<p class="empty">Nothing yet. <a href="/submit">Submit a job</a>.</p>
+{% endif %}
+</div>
+{% endblock %}

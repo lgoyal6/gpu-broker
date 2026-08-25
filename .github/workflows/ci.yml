@@ -1,0 +1,66 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12"]
+
+    env:
+      # Every phase must run with no AWS account: our G and P vCPU quota may be
+      # zero. These are deliberately junk. If a test ever needs real credentials
+      # it will fail here rather than passing quietly on somebody's laptop.
+      AWS_ACCESS_KEY_ID: ci-has-no-aws
+      AWS_SECRET_ACCESS_KEY: ci-has-no-aws
+      AWS_DEFAULT_REGION: us-west-2
+      AWS_EC2_METADATA_DISABLED: "true"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]" ruff
+
+      - name: Lint
+        run: ruff check --select F,E9 gpu_broker tests
+
+      - name: Test
+        # Includes the EC2 backend. moto answers the AWS APIs locally, so the
+        # junk credentials above are never exchanged for anything real.
+        run: pytest -q
+
+      - name: The CLI works on a machine that has never seen this project
+        run: |
+          export GPU_BROKER_HOME="$(mktemp -d)"
+          export GPU_BROKER_USER=ci
+          # A few seconds of simulated work: enough to exercise dispatch,
+          # accrual, completion, and teardown against a real wall clock.
+          gpu submit --gpu a10g --hours 0.002 --budget 2 -- python train.py
+          gpu queue --why
+          gpu run --interval 2
+          gpu status
+          gpu budget
+          gpu reconcile
+          gpu reap
+          gpu tick --dry-run
+          gpu hosts
+          gpu prices
+          gpu forecast
+          gpu reclaim
+          gpu doctor
+          gpu env list
+          gpu metrics
+          gpu digest
+          gpu report

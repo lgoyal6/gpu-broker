@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+{% block title %}pool &middot; gpu-broker{% endblock %}
+{% block body %}
+<h1>The pool</h1>
+<p class="sub">Who holds what, and how long the credits last.</p>
+
+<div class="cards">
+  {% for f in forecasts %}
+  <div class="panel card">
+    <div class="k">{{ "dollars" if f.currency.value == "USD" else "free gpu-hours" }} left</div>
+    <div class="v">{{ f.available | money(f.currency) }}</div>
+    <div class="n">
+      {% if f.days_left is none %}nothing being spent
+      {% else %}{{ f.burn_per_day | money(f.currency) }}/day &middot;
+        about {{ "%.0f"|format(f.days_left) }} days
+        {%- if not f.confident %} <span title="based on under a day of history">(rough)</span>{% endif %}
+      {% endif %}
+    </div>
+  </div>
+  {% endfor %}
+  <div class="panel card">
+    <div class="k">queue</div>
+    <div class="v">{{ queue_depth }}</div>
+    <div class="n">{{ holders | length }} running</div>
+  </div>
+  <div class="panel card">
+    <div class="k">your budget</div>
+    <div class="v">{{ my_balances[my_balances.keys()|list|first].available | money }}</div>
+    <div class="n">this month</div>
+  </div>
+</div>
+
+{% for f in forecasts if f.level != "OK" %}
+<div class="note {{ 'bad' if f.level in ('CRITICAL','EXHAUSTED') else '' }}">
+  <strong>{{ f.level }}</strong> &mdash; {{ f.headline() }}
+</div>
+{% endfor %}
+
+{% if idle %}
+<div class="note">
+  {{ idle | length }} job{{ '' if idle|length == 1 else 's' }} holding a GPU without using it:
+  {% for v in idle %}<a href="/jobs/{{ v.job.job_id }}">{{ v.job.short_id }}</a> ({{ v.job.user_id }}){% if not loop.last %}, {% endif %}{% endfor %}
+</div>
+{% endif %}
+
+<h2>Running now</h2>
+<div class="panel">
+{% if holders %}
+<table>
+  <tr><th>job</th><th>who</th><th>gpu</th><th>state</th><th class="num">running</th>
+      <th class="num">spent</th><th>gpu use</th></tr>
+  {% for h in holders %}
+  <tr>
+    <td><a class="mono" href="/jobs/{{ h.job.job_id }}">{{ h.job.short_id }}</a></td>
+    <td>{{ h.job.user_id }}</td>
+    <td>{{ h.job.gpu_type }}</td>
+    <td><span class="state s-{{ h.job.state.value }}">{{ h.job.state.value }}</span></td>
+    <td class="num">{{ h.elapsed | duration }}</td>
+    <td class="num">{{ h.spent | money(h.job.currency) }}</td>
+    <td>
+      {% if h.utilization is not none %}
+        <span class="meter">
+          <span class="bar {{ 'low' if h.utilization < 5 else '' }}"><i style="width: {{ h.utilization }}%"></i></span>
+          <span class="dim">{{ "%.0f"|format(h.utilization) }}%</span>
+        </span>
+      {% else %}<span class="dim">no samples yet</span>{% endif %}
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}<p class="empty">Nothing running. The pool is idle.</p>{% endif %}
+</div>
+
+<h2>Next in the queue</h2>
+<div class="panel">
+{% if queue %}
+<table>
+  <tr><th>#</th><th>job</th><th>who</th><th>gpu</th><th class="num">waited</th><th class="num">priority</th></tr>
+  {% for job, priority in queue %}
+  <tr>
+    <td class="dim">{{ loop.index }}</td>
+    <td><a class="mono" href="/jobs/{{ job.job_id }}">{{ job.short_id }}</a></td>
+    <td>{{ job.user_id }}</td>
+    <td>{{ job.gpu_type }}</td>
+    <td class="num">{{ priority.wait_hours | duration }}</td>
+    <td class="num" title="{{ priority.explain() }}">{{ "%.3f"|format(priority.score) }}</td>
+  </tr>
+  {% endfor %}
+</table>
+<p class="dim" style="margin:.8rem 0 0">
+  Ordering is fair share plus waiting time. Somebody who has used less of the pool
+  this month goes first, and waiting long enough beats that.
+</p>
+{% else %}<p class="empty">Queue is empty.</p>{% endif %}
+</div>
+
+{% if hosts %}
+<h2>Lab machines</h2>
+<div class="panel">
+<table>
+  <tr><th>host</th><th>state</th><th>gpus</th><th>limits</th><th>why</th></tr>
+  {% for h in hosts %}
+  <tr>
+    <td class="mono">{{ h.hostname }}</td>
+    <td><span class="state s-{{ 'RUNNING' if h.state.accepts_jobs else 'CANCELLED' }}">{{ h.state.value }}</span></td>
+    <td>{% for g in h.gpus %}{{ g.name }}{% if not loop.last %}, {% endif %}{% else %}<span class="dim">-</span>{% endfor %}</td>
+    <td>{% if h.limits_enforced %}<span class="dim">enforced</span>{% elif h.limits_tested %}<strong style="color:var(--bad)">NOT ENFORCED</strong>{% else %}<span class="dim">?</span>{% endif %}</td>
+    <td class="dim">{{ h.reason }}</td>
+  </tr>
+  {% endfor %}
+</table>
+</div>
+{% endif %}
+{% endblock %}
