@@ -5,7 +5,7 @@ free tier - with a dollar budget nobody can silently exceed.
 
 [![CI](https://github.com/lgoyal6/gpu-broker/actions/workflows/ci.yml/badge.svg)](https://github.com/lgoyal6/gpu-broker/actions/workflows/ci.yml)
 
-![Fair share putting the heaviest user last, and a job caught holding a GPU an hour after its training script died - with the samples that justify it](docs/demo.gif)
+![Fair share putting the heaviest user last, and a job caught holding a GPU six hours after its training script died - with the samples that justify it](docs/demo.gif)
 
 ## Why this exists
 
@@ -36,7 +36,7 @@ Everything runs against a simulator until you point it at real hardware.
 
 For your club, see **[docs/DEPLOY.md](docs/DEPLOY.md)**.
 
-![The pool dashboard: who holds what, burn rate, days of runway, and a job flagged for holding a GPU without using it](docs/dashboard.png)
+![The pool dashboard: who holds what, burn rate, days of runway, utilization over the last 24 hours, and a job flagged for holding a GPU without using it](docs/dashboard.png)
 
 ## Architecture
 
@@ -164,6 +164,13 @@ tests/              640 tests across 30 files
 
 ## Limitations (deliberate)
 
+- **If you are the only heavy user, this is worse for you.** Fair share exists to
+  stop one person absorbing the pool, which means that when there is only one
+  person with real work, the broker adds queue latency and startup overhead in
+  exchange for a fairness nobody needed. `gpu report` prints your total wait in
+  hours next to the good numbers so the trade is visible rather than assumed.
+  Reverse `placement_order` or raise your own budget if the answer is that you
+  should just launch instances yourself.
 - **Nothing here has run on real hardware.** No real EC2 instance, no real
   A6000, no real spot interruption, no real `docker build`. The doubles are
   good; the first deploy will still find things.

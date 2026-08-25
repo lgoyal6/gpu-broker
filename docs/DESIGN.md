@@ -43,6 +43,12 @@ without one, two ticks could dispatch same-priority jobs in different orders and
 `gpu queue --why` prints both terms for every job. If you are behind, the answer
 is a row of numbers rather than a shrug.
 
+**Where this loses.** Fair share is a cost paid by whoever would otherwise have
+had the pool to themselves. With one active user it is pure overhead: queue
+latency and a poll interval bought in exchange for a fairness nobody needed.
+`gpu report` prints that user's cumulative wait by name, so the trade shows up
+next to the numbers that flatter the design rather than only in the ones that do.
+
 ## Two currencies
 
 Cloud capacity costs dollars. The lab A6000 costs nothing and is scheduled in

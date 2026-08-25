@@ -535,3 +535,39 @@ def test_the_report_page_shows_where_it_loses(client, rig):
     assert "What actually happened" in body
     assert "Where it loses" in body
     assert "Not measured here" in body
+
+
+def test_the_dashboard_charts_utilization_over_time(client, rig):
+    """The build prompt asks the pool dashboard for utilization *over time*, not
+    just right now."""
+    import datetime as dt
+
+    from gpu_broker.db.connection import transaction
+    from gpu_broker.metrics import QUEUE_DEPTH, UTILIZATION
+
+    # Points spread across the window. A real deployment ticks every 30s; six
+    # ticks inside one millisecond land in one bucket and draw no line.
+    with daemon(rig) as broker:
+        broker.add_user("ana")
+        now = broker.clock.now()
+        with transaction(broker.store.conn) as conn:
+            conn.executemany(
+                "INSERT INTO metrics (name, at, value, labels) VALUES (?, ?, ?, '')",
+                [
+                    (name, (now - dt.timedelta(minutes=m)).isoformat(timespec="microseconds"), value)
+                    for m in range(30, 720, 30)
+                    for name, value in ((UTILIZATION, 40.0 + m / 30), (QUEUE_DEPTH, float(m % 5)))
+                ],
+            )
+
+    sign_in(client, rig)
+    body = client.get("/").text
+    assert "Over the last 24 hours" in body
+    assert "<polyline" in body, "a dense series rendered no line"
+    assert "gpu utilization, mean across running jobs" in body
+
+
+def test_the_dashboard_omits_the_chart_when_there_is_nothing_to_draw(client, rig):
+    """Rather than an empty axis implying the pool sat at zero."""
+    sign_in(client, rig)
+    assert "Over the last 24 hours" not in client.get("/").text

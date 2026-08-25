@@ -298,3 +298,72 @@ def test_a_stored_baseline_appears_in_the_report(broker, users):
 
 def test_no_baseline_says_how_to_get_one(broker, users):
     assert "put the numbers in by hand" in markdown(broker.report())
+
+
+# ---------------------------------------------------------------- bucketing
+
+
+def test_a_series_buckets_into_equal_slices(broker, users, clock):
+
+    start = clock.now()
+    for _ in range(12):
+        broker.tick()
+        clock.advance(minutes=10)
+
+    buckets = broker.metrics.bucketed(QUEUE_DEPTH, start, clock.now(), buckets=6)
+    assert len(buckets) == 6
+    assert all(b is not None for b in buckets)
+
+
+def test_a_gap_in_the_record_stays_a_gap(broker, users, clock):
+    """`None`, not zero. A pool that was switched off did not have a GPU sitting
+    idle -- nothing was running at all, and drawing that as a floor would be a
+    different and wrong claim."""
+
+    start = clock.now()
+    broker.tick()
+    clock.advance(hours=6)          # the broker was down
+    broker.tick()
+
+    buckets = broker.metrics.bucketed(QUEUE_DEPTH, start, clock.now(), buckets=6)
+    assert buckets[0] is not None
+    assert any(b is None for b in buckets), "a six-hour outage rendered as data"
+
+
+def test_bucketing_an_empty_window_is_not_a_crash(broker, users, clock):
+    now = clock.now()
+    assert broker.metrics.bucketed(QUEUE_DEPTH, now, now) == []
+
+
+def test_the_sparkline_breaks_across_a_gap(broker):
+    from gpu_broker.web.app import _sparkline
+
+    svg = _sparkline([10.0, 20.0, None, None, 40.0, 50.0])
+    assert svg.count("<polyline") == 2, "drew through a gap"
+
+
+def test_an_isolated_sample_is_drawn_as_a_dot(broker):
+    """A pool used twice a day has every sample isolated between gaps. A
+    polyline needs two points, so without this the panel renders blank and
+    looks like no data rather than sparse data."""
+    from gpu_broker.web.app import _sparkline
+
+    svg = _sparkline([None, 40.0, None, 60.0, None])
+    assert svg.count("<circle") == 2
+    assert "<polyline" not in svg
+
+
+def test_a_sparkline_with_nothing_to_draw_renders_nothing(broker):
+    from gpu_broker.web.app import _sparkline
+
+    assert _sparkline([]) == ""
+    assert _sparkline([None, None]) == ""
+
+
+def test_the_sparkline_respects_a_ceiling(broker):
+    """Utilization is drawn against 0-100, not against its own maximum, or a
+    pool that peaked at 3% would look busy."""
+    from gpu_broker.web.app import _sparkline
+
+    low = _sparkline([1.0, 2.0, 3.0], height=100, ceiling=100.0)
+    assert "99" in low or "98" in low, "a 3% peak was drawn near the top"
