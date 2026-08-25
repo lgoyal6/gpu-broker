@@ -5,14 +5,14 @@ free tier - with a dollar budget nobody can silently exceed.
 
 [![CI](https://github.com/lgoyal6/gpu-broker/actions/workflows/ci.yml/badge.svg)](https://github.com/lgoyal6/gpu-broker/actions/workflows/ci.yml)
 
-One unauthenticated page: pool utilization, jobs run, credits reclaimed and
-queue depth, with no sign-in and no usernames.
+**[Live status page](https://gpu-broker-status.vercel.app)** - pool utilization,
+jobs run, credits reclaimed and queue depth, with no sign-in and no usernames.
 
 [![The public status page: pool utilization over 7 and 30 days, jobs run this week by outcome, credit spent and reclaimed, and recent activity with members shown as anonymous labels](docs/status-page.png)](docs/status-page.png)
 
-*The screenshot above is seeded demo data, and says so on the page. It is
-replaced by real numbers as soon as the pilot runs - see [Demo data and the
-pilot](#demo-data-and-the-pilot).*
+*That page and the screenshot above are currently a snapshot of seeded demo
+data, and say so on the page. Both are replaced by real numbers as soon as the
+pilot runs - see [Demo data and the pilot](#demo-data-and-the-pilot).*
 
 ![Fair share putting the heaviest user last, and a job caught holding a GPU six hours after its training script died - with the samples that justify it](docs/demo.gif)
 
@@ -84,6 +84,11 @@ Two things are structural rather than careful:
 The page is cached for a few seconds, because a link that gets attention arrives
 as a burst and rebuilding the aggregates per reader turns one link into a
 hundred table scans against the file the scheduler is writing to.
+
+For somewhere that cannot run the broker, `python docs/_status_export.py` writes
+the same page as one self-contained HTML file plus its JSON. That is a snapshot
+rather than a live page: it shows the pool as it was when the export ran. The
+genuinely live page is the `--only-public` process next to the scheduler.
 
 ## Demo data and the pilot
 
