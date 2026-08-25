@@ -1,0 +1,130 @@
+"""Whether a submission is allowed in at all.
+
+The standing rule is that a budget is never silently exceeded. That splits into
+two behaviours that look similar and are not:
+
+  refused   The user's own monthly budget cannot cover this job. Nothing about
+            waiting fixes it. Say the number and the shortfall, record the
+            refusal, and stop.
+
+  waits     The pool-wide cap is currently committed. That frees up as jobs
+            settle, so the job sits in the queue rather than being thrown away.
+            Checked at dispatch, not here.
+
+Typos are not refusals. An unknown GPU type or a negative hour count raises,
+because there is nothing to audit later and nothing the club needs a record of.
+"""
+
+from __future__ import annotations
+
+from decimal import Decimal
+
+from .config import BrokerConfig
+from .errors import BrokerError
+from .models import Balance, Refusal
+from .money import ZERO, Currency, fmt, money, quantize
+
+
+def validate_request(config: BrokerConfig, gpu_type: str, hours: float) -> None:
+    """Reject nonsense before anything is written. Raises, does not refuse."""
+    config.gpu(gpu_type)  # raises UnknownGpuType with the list of known types
+    if hours <= 0:
+        raise BrokerError(f"--hours must be positive, got {hours}")
+    if hours > config.max_job_hours:
+        raise BrokerError(
+            f"--hours {hours:g} exceeds the per-job limit of "
+            f"{config.max_job_hours:g}h. Split the run, or checkpoint and resubmit."
+        )
+
+
+def billable_hours(config: BrokerConfig, hours: float) -> float:
+    """Requested run time plus the startup the broker will be billed for.
+
+    Every cost estimate in the system goes through this, so the number quoted at
+    submit time and the number charged at tick time cannot drift apart.
+    """
+    return hours + config.startup_allowance_hours
+
+
+def default_reservation(config: BrokerConfig, gpu_type: str, hours: float) -> Decimal:
+    """What the job costs if it runs for exactly as long as it asked.
+
+    This is the default `--budget`. It includes the startup allowance: a
+    reservation that covers only run time would be short by however long the
+    machine took to boot, and the job would be stopped at its ceiling just before
+    finishing. That failure is invisible in a unit test with an instant fake and
+    obvious the first time a real g5 takes ninety seconds to come up.
+    """
+    gpu = config.gpu(gpu_type)
+    return quantize(gpu.hourly_price * money(billable_hours(config, hours)), gpu.currency)
+
+
+def check_job_cap(
+    config: BrokerConfig, currency: Currency, reserved: Decimal
+) -> Refusal | None:
+    if reserved <= ZERO:
+        return Refusal(
+            code="INVALID_BUDGET",
+            reason=f"--budget must be positive, got {fmt(reserved, currency)}",
+        )
+    cap = config.max_job(currency)
+    if reserved > cap:
+        return Refusal(
+            code="JOB_CAP_EXCEEDED",
+            reason=(
+                f"refused: this job reserves {fmt(reserved, currency)}, over the "
+                f"per-job cap of {fmt(cap, currency)} "
+                f"(short {fmt(quantize(reserved - cap, currency), currency)}). "
+                f"Lower --hours, or set --budget under the cap to stop it early."
+            ),
+            shortfall=quantize(reserved - cap, currency),
+            currency=currency,
+        )
+    return None
+
+
+def check_user_budget(balance: Balance, reserved: Decimal) -> Refusal | None:
+    """The refusal the gate cares about: named number, named shortfall."""
+    if reserved <= balance.available:
+        return None
+
+    shortfall = quantize(reserved - balance.available, balance.currency)
+    currency = balance.currency
+    return Refusal(
+        code="USER_BUDGET_EXCEEDED",
+        reason=(
+            f"refused: this job needs {fmt(reserved, currency)} but you have "
+            f"{fmt(balance.available, currency)} left this month "
+            f"(short {fmt(shortfall, currency)}). "
+            f"Your {fmt(balance.budget, currency)} budget is "
+            f"{fmt(balance.spent, currency)} spent and "
+            f"{fmt(balance.held, currency)} held by running jobs."
+        ),
+        shortfall=shortfall,
+        currency=currency,
+    )
+
+
+def ceiling_warning(
+    config: BrokerConfig, gpu_type: str, hours: float, reserved: Decimal
+) -> str | None:
+    """Warn when `--budget` cannot pay for `--hours`.
+
+    Not a refusal. The job is legal and will run; it will just be stopped when
+    it hits its ceiling. Saying so at submit time is the difference between an
+    expected outcome and a confusing one.
+    """
+    gpu = config.gpu(gpu_type)
+    full_cost = quantize(gpu.hourly_price * money(billable_hours(config, hours)), gpu.currency)
+    if full_cost <= reserved:
+        return None
+    usable = max(
+        0.0, float(reserved / gpu.hourly_price) - config.startup_allowance_hours
+    )
+    return (
+        f"heads up: {fmt(reserved, gpu.currency)} buys about {usable:.1f}h of compute "
+        f"on {gpu_type} (after startup), but you asked for {hours:g}h. The job will be "
+        f"stopped at its ceiling. Raise --budget to {fmt(full_cost, gpu.currency)} to "
+        f"run the full {hours:g}h."
+    )
+
