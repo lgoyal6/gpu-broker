@@ -5,6 +5,15 @@ free tier - with a dollar budget nobody can silently exceed.
 
 [![CI](https://github.com/lgoyal6/gpu-broker/actions/workflows/ci.yml/badge.svg)](https://github.com/lgoyal6/gpu-broker/actions/workflows/ci.yml)
 
+One unauthenticated page: pool utilization, jobs run, credits reclaimed and
+queue depth, with no sign-in and no usernames.
+
+[![The public status page: pool utilization over 7 and 30 days, jobs run this week by outcome, credit spent and reclaimed, and recent activity with members shown as anonymous labels](docs/status-page.png)](docs/status-page.png)
+
+*The screenshot above is seeded demo data, and says so on the page. It is
+replaced by real numbers as soon as the pilot runs - see [Demo data and the
+pilot](#demo-data-and-the-pilot).*
+
 ![Fair share putting the heaviest user last, and a job caught holding a GPU six hours after its training script died - with the samples that justify it](docs/demo.gif)
 
 ## Why this exists
@@ -37,6 +46,80 @@ Everything runs against a simulator until you point it at real hardware.
 For your club, see **[docs/DEPLOY.md](docs/DEPLOY.md)**.
 
 ![The pool dashboard: who holds what, burn rate, days of runway, utilization over the last 24 hours, and a job flagged for holding a GPU without using it](docs/dashboard.png)
+
+## The status page
+
+The club app is behind GitHub OAuth, which is right for something that spends
+money and useless for showing anybody that the thing works. So there is exactly
+one unauthenticated page.
+
+```bash
+gpu web --public              # club app, plus /status with no sign-in
+gpu web --only-public         # just the status page, nothing else mounted
+```
+
+It publishes pool utilization over 7 and 30 days, jobs run this week and this
+month split by outcome, credit spent and reclaimed, runway at the current burn
+rate, queue depth, what is running now, and the split between cloud and local
+capacity. The same numbers are served as JSON for anything that would rather not
+scrape HTML: `/status.json` under `--only-public`, `/status/status.json` when it
+is mounted into the club app.
+
+What it does not publish: usernames, commands, job ids, hostnames, instance ids,
+log lines. Members appear as `user-a`, `user-b`, assigned by when they first
+used the broker - an ordinal rather than a hash, because a hash of a GitHub
+login is reversible when the roster is twenty names.
+
+Two things are structural rather than careful:
+
+- **Read-only by construction.** The page is served by a separate ASGI app whose
+  route table has no submit, no cancel, and no admin. A test walks the routes
+  and fails if any of them accepts anything but `GET`. `--only-public` runs that
+  app alone, so the public hostname is not even the same process as the one that
+  can sign people in.
+- **The aggregates are built by addition, not subtraction.** A `PublicJob` is
+  constructed field by field from a `Job` rather than being a `Job` with fields
+  hidden in the template, so adding a column to the jobs table cannot leak it.
+
+The page is cached for a few seconds, because a link that gets attention arrives
+as a burst and rebuilding the aggregates per reader turns one link into a
+hundred table scans against the file the scheduler is writing to.
+
+## Demo data and the pilot
+
+A status page with nothing on it convinces nobody, and inventing numbers is
+worse than an empty page. So there are two honest ways to have something to
+look at.
+
+**Seeded demo data** lives in its own database, never in the same tables as real
+jobs:
+
+```bash
+gpu demo seed                 # builds <state dir>/demo
+gpu web --only-public --state-dir ~/.gpu-broker/demo
+```
+
+Every row is produced by running the real broker - real submissions, real ticks,
+real utilization samples, a real spot interruption that resumes from its
+checkpoint, and a real idle reclaim with the samples that justified it. Because
+it drives the real paths it doubles as an integration fixture: the scenario
+reports which lifecycle states it actually reached, and a test asserts the list.
+Any page built from it is labelled seeded demo data, and that label cannot be
+turned off.
+
+**Pilot mode** puts real work on the lab GPU through the broker before twenty
+people are on it:
+
+```bash
+gpu submit --pilot --hours 6 -- python train.py
+```
+
+Pilot jobs run on free local capacity only. They are pinned to the local tier,
+so placement cannot fall back to spot when the lab machine is busy, and nothing
+in the cloud is provisioned. They are recorded exactly like a club job, tagged
+`pilot` rather than `seeded`, and they count in every number on the status page.
+While the pool has one user the page says so, because a queue of one is not
+evidence of a queue.
 
 ## Architecture
 
@@ -110,7 +193,9 @@ Deeper: **[docs/DESIGN.md](docs/DESIGN.md)**.
 | `gpu hosts` · `gpu env list` | lab machines · named environments |
 | `gpu report` · `gpu digest` | what actually happened · the weekly note |
 | `gpu doctor` | what is wrong, and what to do about it |
-| `gpu run` · `gpu web` | the daemon · the pages |
+| `gpu submit --pilot -- python train.py` | real work, lab GPU only, nothing in the cloud |
+| `gpu demo seed` | a demo database, in its own file, labelled as one |
+| `gpu run` · `gpu web [--public\|--only-public]` | the daemon · the pages · the status page |
 
 Day-to-day operations: **[docs/OPERATIONS.md](docs/OPERATIONS.md)**.
 
@@ -157,9 +242,12 @@ gpu_broker/
   backends/         fake · ec2 (spot + on-demand) · local
   local/            SSH transport, the exact shell commands, host health
   web/              FastAPI, Jinja, ~30 lines of JS. No build step.
+  web/public.py     the aggregates the status page may show, built by addition
+  web/publicapp.py  the read-only app: no submit, no cancel, no admin
+  demo/             seeded history, generated by running the real broker
   report.py         the measurement report, including where it loses
 docs/               design, deploy, operations
-tests/              640 tests across 30 files
+tests/              721 tests across 33 files
 ```
 
 ## Limitations (deliberate)

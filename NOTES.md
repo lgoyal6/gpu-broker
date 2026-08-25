@@ -188,3 +188,34 @@ Ideas that came up while building but were **not** asked for. Nothing here is im
 - **MPS overhead is still unmeasured.** It needs the same job run both ways on
   the real A6000 and timed. The report names it as not measured rather than
   leaving a gap somebody assumes was covered.
+
+## From the status page and pilot work
+
+- **`CHECKPOINTING` is a declared state nothing enters.** The lifecycle names it,
+  and no code path in the broker sets it: `_preempt` terminates, collects
+  whatever the job saved, and goes straight to `PREEMPTED`. So the two-minute
+  interruption window is not represented in the job's own history, and "was it
+  still writing its checkpoint when we gave up on it" is not answerable from the
+  transitions table. Either the spot handler should walk through it or the state
+  should go. Named in `tests/test_demo_scenario.py::NEVER_SET` so it stays
+  visible instead of looking like coverage.
+- **The local backend's utilization probe had never been exercised end to end.**
+  Idle detection and reclaim were tested against `FakeBackend` only; the
+  in-process SSH host had no answer for the `pmon` + `query-compute-apps` probe,
+  so `LocalBackend.sample_utilization` was never run against its own parser in a
+  test. It is now. That gap is exactly the kind of thing the pilot exists to find,
+  and it was found without a real GPU.
+- **Reclaimed credit is an assumption, stated as one.** It is the part of a
+  reservation an idle job never spent, which assumes the job would have kept
+  holding the GPU. That is what it was doing when idle detection caught it, but
+  it is not the same as measured savings, and the status page says so rather than
+  presenting the number bare.
+- **The status page cache is per process, not shared.** Two `gpu web` processes
+  behind a load balancer each keep their own copy, so a reader can see a value up
+  to `public_status_cache_seconds` older than another reader's. For a page whose
+  smallest unit is a job this does not matter; if it ever serves something
+  finer-grained it would.
+- **Demo seeding is deterministic but not stable across code changes.** The same
+  `rng_seed` gives the same history from the same code. Change the scheduler and
+  the seeded database changes, which is correct but means a screenshot is not
+  reproducible from the seed alone.
