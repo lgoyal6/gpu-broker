@@ -126,6 +126,13 @@ def submit(
         Optional[str],
         typer.Option("--env", help="A named environment. `gpu env list` shows them."),
     ] = None,
+    pilot: Annotated[
+        bool,
+        typer.Option(
+            "--pilot",
+            help="Run on the free lab GPU only. Nothing in the cloud is provisioned.",
+        ),
+    ] = False,
     user: Annotated[Optional[str], typer.Option("--user", hidden=True)] = None,
     state_dir: Annotated[Optional[str], typer.Option("--state-dir", hidden=True)] = None,
 ) -> None:
@@ -144,6 +151,32 @@ def submit(
 
     broker = open_broker(state_dir)
     user_id = whoami(user)
+
+    if pilot:
+        # The point of a pilot is to put real work through the broker without
+        # putting the club's credits behind it, so this refuses rather than
+        # quietly picking a cheap instance.
+        #
+        # Asking click where the value came from, rather than comparing it to
+        # the default: somebody who types `--gpu a10g` explicitly has said
+        # something, and silently swapping it for the lab card would be the
+        # broker deciding it knew better.
+        # By name, not by identity: typer vendors its own copy of click, so
+        # `ctx.get_parameter_source` returns a `typer._click.core.ParameterSource`
+        # and `is ParameterSource.DEFAULT` against the real click enum is always
+        # False -- which silently made every run look like an explicit --gpu.
+        chose_gpu = getattr(ctx.get_parameter_source("gpu"), "name", "") != "DEFAULT"
+        if not chose_gpu:
+            gpu = _local_gpu(broker) or gpu
+        try:
+            if broker.config.gpu(gpu).currency is not Currency.GPU_HOUR:
+                die(
+                    f"--pilot runs on free local capacity and {gpu} is cloud capacity",
+                    f"drop --gpu, or pass --gpu {_local_gpu(broker) or 'a6000'}",
+                )
+        except BrokerError as exc:
+            die(str(exc))
+
     try:
         ensure_user(broker, user_id)
         result = broker.submit(
@@ -153,6 +186,7 @@ def submit(
             hours=hours,
             budget=parsed_budget,
             environment=env,
+            origin="pilot" if pilot else "real",
         )
     except BrokerError as exc:
         die(str(exc))
@@ -166,6 +200,11 @@ def submit(
         raise typer.Exit(code=2)
 
     job = result.job
+    if pilot:
+        # Pinning is what actually keeps it off EC2. Without it, placement is
+        # free to fall back to spot the moment the lab machine is busy, which
+        # is exactly the surprise a pilot is supposed to not have.
+        job = broker.store.pin_tier(job, "local", "pilot: local capacity only")
     console.print(
         f"[green]queued[/green] {job.short_id}  {job.gpu_type}  {hours:g}h  "
         f"ceiling {fmt(job.reserved, job.currency)}"
@@ -1296,6 +1335,14 @@ def admin_users(
             "yes" if user.is_admin else "",
         )
     console.print(table)
+
+
+def _local_gpu(broker: Broker) -> str | None:
+    """The first GPU type that is billed in GPU-hours, i.e. free lab capacity."""
+    for gpu_type in broker.config.gpu_types:
+        if gpu_type.currency is Currency.GPU_HOUR:
+            return gpu_type.name
+    return None
 
 
 @demo_app.command("seed", help="Build a demo database so the status page has something on it.")
