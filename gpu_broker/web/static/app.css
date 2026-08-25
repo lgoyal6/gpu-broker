@@ -66,4 +66,7 @@ button.quiet { background: #fff; color: var(--bad); border-color: var(--line); }
 #logs .broker { color: #8ea7c9; }
 .dim { color: var(--dim); }
 .empty { color: var(--dim); padding: 1.2rem 0; }
-.note.demo { border-color: var(--warn); color: inherit; }
+.marker { font-size: .88em; margin: -.3rem 0 1.1rem; }
+.pill { display: inline-block; border: 1px solid var(--warn); color: var(--warn);
+  border-radius: 999px; padding: .05rem .5rem; font-size: .82em;
+  text-transform: uppercase; letter-spacing: .04em; margin-right: .25rem; }
