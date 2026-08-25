@@ -9,3 +9,6 @@ __pycache__/
 
 # demo scratch
 /tmp/gpu-broker-demo/
+
+# Scratch state dir used by docs/_status_shot.py
+.status-shot/
