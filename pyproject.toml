@@ -1,0 +1,57 @@
+[project]
+name = "gpu-broker"
+version = "0.1.0"
+description = "A hybrid GPU broker: one queue in front of cloud, local, and free-tier capacity."
+requires-python = ">=3.11"
+dependencies = [
+    "typer>=0.12",
+    "rich>=13.7",
+    "boto3>=1.34",
+    "asyncssh>=2.14",
+]
+
+[project.optional-dependencies]
+web = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "jinja2>=3.1",
+    "itsdangerous>=2.1",
+    "httpx>=0.27",
+    "python-multipart>=0.0.9",
+]
+dev = [
+    "gpu-broker[web]",
+    "pytest>=8.0",
+    "pytest-timeout>=2.3",
+    # Mocks the real AWS APIs, so the EC2 backend is tested against what EC2
+    # actually accepts rather than against a fake written from the same
+    # assumptions as the code. Notably it honours DryRun.
+    "moto[ec2,ssm,logs,s3]>=5.0",
+    # A real torch, so the checkpoint adapters are tested against the thing they
+    # wrap rather than against a stub written from the same assumptions.
+    "torch>=2.0",
+    "ruff>=0.5",
+]
+
+[project.scripts]
+gpu = "gpu_broker.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["gpu_broker"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+timeout = 120
+filterwarnings = [
+    # starlette's TestClient nags about httpx2; nothing to act on here.
+    "ignore::DeprecationWarning:starlette.*",
+    "ignore:Using `httpx` with `starlette.testclient`:",
+]
+markers = [
+    "aws: exercises the AWS APIs through moto. Still needs no account or credentials, just slower.",
+]
