@@ -66,3 +66,4 @@ button.quiet { background: #fff; color: var(--bad); border-color: var(--line); }
 #logs .broker { color: #8ea7c9; }
 .dim { color: var(--dim); }
 .empty { color: var(--dim); padding: 1.2rem 0; }
+.note.demo { border-color: var(--warn); color: inherit; }

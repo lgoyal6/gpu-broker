@@ -59,6 +59,19 @@ class WebConfig:
     session_secret: str = ""
     session_max_age_seconds: int = 60 * 60 * 24 * 14
     admins: tuple[str, ...] = ()
+    public_status: bool = False
+    """Serve an unauthenticated /status page.
+
+    Off by default. It publishes how much the club is spending and how busy the
+    pool is, which is the point when you want to show somebody the thing is
+    real, and not something to start doing because a config default said so.
+    Usernames never appear on it -- see `gpu_broker.web.public`."""
+    public_status_title: str = "GPU broker"
+    public_status_cache_seconds: float = 15.0
+    """How long one render is reused. A page that exists to be linked gets read
+    in bursts, and rebuilding the aggregates per reader turns one link into a
+    hundred table scans against the file the scheduler is writing to."""
+
     metrics_token: str = ""
     """Bearer token for `/metrics`. Unset means the endpoint is off, because the
     series carry usernames and job ids and a scrape endpoint is not something to
