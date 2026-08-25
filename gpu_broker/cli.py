@@ -978,6 +978,17 @@ def report(
 def web(
     host: Annotated[str, typer.Option("--host")] = "127.0.0.1",
     port: Annotated[int, typer.Option("--port")] = 8000,
+    public: Annotated[
+        bool,
+        typer.Option("--public", help="Serve the unauthenticated status page at /status."),
+    ] = False,
+    only_public: Annotated[
+        bool,
+        typer.Option(
+            "--only-public",
+            help="Serve ONLY the status page. No sign-in, no submit, no admin.",
+        ),
+    ] = False,
     state_dir: Annotated[Optional[str], typer.Option("--state-dir", hidden=True)] = None,
 ) -> None:
     try:
@@ -992,8 +1003,24 @@ def web(
 
     root = state_dir or os.environ.get(STATE_DIR_ENV)
     config = load_config(Path(root) if root else None)
+
+    if only_public:
+        # Nothing else is mounted. This is the process you put on a public
+        # hostname: it cannot sign anyone in and has no route that writes.
+        from .web.app import open_broker as open_web_broker
+        from .web.publicapp import create_public_app
+
+        application = create_public_app(lambda: open_web_broker(config))
+        console.print(
+            f"[dim]serving the status page on http://{host}:{port} -- "
+            f"read-only, no sign-in, nothing here can change anything.[/dim]"
+        )
+        uvicorn.run(application, host=host, port=port, log_level="warning")
+        return
+
     try:
-        application = create_app(config=config)
+        overrides = {"public_status": True} if public else None
+        application = create_app(config=config, web_overrides=overrides)
     except BrokerError as exc:
         die(str(exc))
 
@@ -1001,6 +1028,8 @@ def web(
         f"[dim]serving on http://{host}:{port} -- this process holds no AWS "
         f"credentials and launches nothing. Run `gpu run` alongside it.[/dim]"
     )
+    if public:
+        console.print(f"[dim]status page, no sign-in: http://{host}:{port}/status[/dim]")
     uvicorn.run(application, host=host, port=port, log_level="warning")
 
 
