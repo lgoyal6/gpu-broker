@@ -17,3 +17,6 @@ __pycache__/
 site/
 .vercel/
 .env.local
+
+# graphify knowledge graph (local index, not source)
+graphify-out/
