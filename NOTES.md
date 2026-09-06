@@ -219,3 +219,54 @@ Ideas that came up while building but were **not** asked for. Nothing here is im
   `rng_seed` gives the same history from the same code. Change the scheduler and
   the seeded database changes, which is correct but means a screenshot is not
   reproducible from the seed alone.
+
+## From the authorization, limits and observability work
+
+All numbers below were measured on a CPU-only laptop against the fake backend.
+
+- **Authorization at submission is not authorization.** A job sits in the queue
+  for hours; membership was checked once, when a fourteen-day session cookie was
+  issued, and the daemon that dispatches jobs had no notion of membership at all.
+  Measured before the fix: a member's queued job was dispatched after her access
+  was revoked, on the club's credits, and setting her budget to zero did nothing
+  to it because a queued job already holds its reservation. The check now lives
+  in the users table, which is the only place both `gpu web` and `gpu run` can
+  see, and the scheduler asks it once per tick.
+- **The ownership check was in the callers, not in the thing that cancels.**
+  `gpu cancel` and the web app both checked before calling `Broker.cancel`, and
+  `Broker.cancel` checked nothing - so the rule was "every future caller
+  remembers". Before the fix, `cancel(actor="bo")` on another member's running
+  job terminated the machine and released her reservation.
+- **An org-only deployment still gets membership checked once.** Re-asking GitHub
+  needs the person's token, which is exchanged at sign-in and deliberately not
+  kept, so there is nothing to re-ask with. An allowlist can be re-read per
+  request and is; an org cannot. Suspension is what covers that case, and it is
+  why suspension exists separately from the allowlist rather than duplicating it.
+- **The log stream was the only long-lived boundary, and it authenticated once.**
+  It checked the session at connect and then yielded output for as long as the
+  socket stayed open. It now re-asks on every poll and ends the stream with a
+  `revoked` event. Two of the tests that pin this had to be written so they fail
+  rather than hang: `client.stream` does not return until the first byte of body,
+  so a stream that is wrongly allowed blocks the test runner instead of failing
+  it.
+- **`/metrics` grew a series per job and never shrank.** The utilization gauge is
+  labelled with a job id, and `latest()` had no time bound, so every job the club
+  had ever run kept its own series. Measured: fifty jobs run to completion left
+  fifty utilization series with nothing running - a scrape body that grows with
+  history rather than with the pool. Bounded now by a staleness window; when the
+  daemon stops, the endpoint empties, which is the honest reading.
+- **`/status.json` had no contract test, and it is built by `asdict`.** Renaming a
+  dataclass attribute republishes the payload without anybody typing a JSON key.
+  Demonstrated: renaming `queue_depth` to `queued_jobs` passed all 63 tests in
+  `test_public_status.py` and `test_web.py`. `tests/fixtures/status_v1.json` was
+  captured from commit f717dde, so the compatibility claim is against a real
+  older build rather than a hand-written wish.
+- **The queue-depth limit bounds the count, not the cost.** A queued job still
+  costs about 20 kB of database (measured: 20,613 bytes/job over 200
+  submissions). What the limit buys is that the number of them is bounded, so a
+  tick stays in single-digit milliseconds instead of reaching 140 ms at 4,000
+  queued.
+- **The log cap is a line cap, not a byte budget.** Ten thousand lines of at most
+  two thousand bytes bounds one job at about 20 MB, which is finite but loose. A
+  real byte budget wants a counter on the job row rather than a `COUNT(*)` per
+  append, which is also what the current check costs on every log line.
