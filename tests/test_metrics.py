@@ -149,6 +149,41 @@ def test_only_the_newest_value_of_each_series_is_exported(broker, users, clock):
     assert len([line for line in body.splitlines() if line.startswith("gpu_broker_queue_depth ")]) == 1
 
 
+def test_a_finished_jobs_series_stops_being_published(broker, users, clock, cloud):
+    """Cardinality. The utilization gauge is labelled with a job id, so without
+    a staleness bound the scrape grows by one line for every job the club has
+    ever run and never shrinks -- measured before this: fifty jobs run to
+    completion left fifty utilization series with nothing running.
+
+    A series nobody is writing to is a fact about last Tuesday. Prometheus keeps
+    whatever is published, so publishing it forever is the leak.
+    """
+    broker.submit(user_id="ana", command="x", gpu_type="a10g", hours=1)
+    for _ in range(3):
+        broker.tick()
+        clock.advance(minutes=1)
+    assert _series(prometheus(broker.metrics), UTILIZATION) == 1
+
+    # Nothing writes to it again: the daemon has moved on, or the job is over.
+    clock.advance(minutes=30)
+    assert _series(prometheus(broker.metrics), UTILIZATION) == 0
+
+
+def test_a_live_series_is_not_dropped_by_the_staleness_bound(broker, users, clock, cloud):
+    """The other half. A bound that also drops what is still running would make
+    the endpoint useless -- `gpu run` ticks every few seconds to a minute, so a
+    live series is always far fresher than the window."""
+    broker.submit(user_id="ana", command="x", gpu_type="a10g", hours=4)
+    for _ in range(10):
+        broker.tick()
+        clock.advance(minutes=5)
+    assert _series(prometheus(broker.metrics), UTILIZATION) == 1
+
+
+def _series(body: str, name: str) -> int:
+    return sum(1 for line in body.splitlines() if line.startswith(f"gpu_broker_{name}{{"))
+
+
 def test_a_hostile_label_cannot_break_the_format(broker):
     broker.metrics.record([("queue_depth", 1.0, {"user": 'ana" evil="'})])
     body = prometheus(broker.metrics)

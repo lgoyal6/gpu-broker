@@ -94,14 +94,28 @@ class Metrics:
             for row in self.store.conn.execute(sql, params)
         ]
 
-    def latest(self, name: str) -> list[Point]:
-        """The newest value of each label set. What Prometheus scrapes."""
-        rows = self.store.conn.execute(
+    def latest(self, name: str, stale_after: dt.timedelta | None = None) -> list[Point]:
+        """The newest value of each label set. What Prometheus scrapes.
+
+        `stale_after` drops label sets nothing has written to recently, and it
+        is the difference between a scrape endpoint and a leak. The utilization
+        gauge is labelled with a job id, so without it every job the club has
+        ever run keeps its own series forever: measured, fifty jobs run to
+        completion left fifty utilization series while zero jobs were running.
+        A series nobody is writing to is not a fact about the pool, it is a
+        fact about last Tuesday, and Prometheus stores it for as long as it is
+        published.
+        """
+        sql = (
             "SELECT name, at, value, labels FROM metrics m WHERE name = ? AND id = ("
             "  SELECT MAX(id) FROM metrics WHERE name = m.name AND labels = m.labels"
-            ") ORDER BY labels",
-            (name,),
-        ).fetchall()
+            ")"
+        )
+        params: list[object] = [name]
+        if stale_after is not None:
+            sql += " AND at >= ?"
+            params.append(to_iso(self.store.clock.now() - stale_after))
+        rows = self.store.conn.execute(sql + " ORDER BY labels", params).fetchall()
         return [
             Point(row["name"], from_iso(row["at"]), row["value"], decode_labels(row["labels"]))
             for row in rows
@@ -204,7 +218,20 @@ _HELP = {
 }
 
 
-def prometheus(metrics: Metrics) -> str:
+STALE_AFTER = dt.timedelta(minutes=15)
+"""How long a series survives without being written to.
+
+Generous next to `gpu run --interval`, which is seconds to a minute, so a
+running pool never drops a series it still means. Short next to how long a
+finished job's series would otherwise live, which is forever.
+
+When the daemon stops, everything goes stale and the endpoint empties out.
+That is the intended reading: no daemon means nobody is measuring the pool, and
+a scrape that keeps serving the last value it saw says the opposite.
+"""
+
+
+def prometheus(metrics: Metrics, stale_after: dt.timedelta | None = STALE_AFTER) -> str:
     """The `/metrics` body.
 
     Hand-written rather than via a client library. The exposition format is a
@@ -213,7 +240,7 @@ def prometheus(metrics: Metrics) -> str:
     """
     lines: list[str] = []
     for name, (kind, help_text) in _HELP.items():
-        points = metrics.latest(name)
+        points = metrics.latest(name, stale_after=stale_after)
         if not points:
             continue
         metric = f"gpu_broker_{name}"
