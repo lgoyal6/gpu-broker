@@ -25,7 +25,7 @@ from .local.transport import SshTransport
 from .clock import Clock, SystemClock
 from .config import BrokerConfig, load_config
 from .db import connect, migrate
-from .errors import BrokerError
+from .errors import BrokerError, Unauthorized
 from .forecast import Forecast, alerts, forecast
 from .digest import Digest
 from .digest import build as build_digest
@@ -283,7 +283,7 @@ class Broker:
             else admission.default_reservation(self.config, gpu_type, hours)
         )
 
-        self.store.get_user(user_id)  # raises UnknownUser before any write
+        user = self.store.get_user(user_id)  # raises UnknownUser before any write
         if environment and self.store.environment(environment) is None:
             known = [e.name for e in self.store.environments()]
             raise BrokerError(
@@ -291,7 +291,12 @@ class Broker:
                 + (f"Known: {', '.join(known)}" if known else "None have been created yet")
             )
 
-        refusal = admission.check_job_cap(self.config, currency, reserved)
+        # Membership first. Somebody who is off the pool should be told that,
+        # not told their budget is short -- and a suspended member must not be
+        # able to learn the pool's headroom by probing this.
+        refusal = admission.check_membership(user)
+        if refusal is None:
+            refusal = admission.check_job_cap(self.config, currency, reserved)
         if refusal is None:
             refusal = admission.check_queue_depth(
                 self.config, self.store.queued_count(user_id)
@@ -328,9 +333,59 @@ class Broker:
             warning=admission.ceiling_warning(self.config, gpu_type, hours, reserved),
         )
 
-    def cancel(self, job_id: str, *, actor: str | None = None) -> Job:
-        """Stop a job and give back whatever it had not spent."""
+    def _require_officer(self, actor: str | None, what: str, *, admin: bool = False) -> None:
+        """The privilege check for everything that acts on the pool itself.
+
+        Same shape as the ownership check inside `cancel`, and here for the same
+        reason: `cancel` used to trust every caller to remember, and so did
+        `suspend_user`, `restore_user`, `drain_host`, `undrain_host` and
+        `add_user`. Fixing one of six is not fixing the rule.
+
+        `admin=True` is the same escape hatch `cancel` has, for a door that
+        establishes officer status some other way -- the web app's officers come
+        from its own config file, not from this table.
+
+        `actor` of None or "" asserts no identity at all. That is the broker
+        calling itself, matching `cancel(actor=None)`, not an anonymous user:
+        every door names its actor.
+
+        The bootstrap: while the pool has no officers, nobody could pass this
+        check, so `gpu admin add-user <you> --admin` on day one has to work. It
+        closes the moment an officer exists, and that is pinned by a test.
+        """
+        if admin or not actor:
+            return
+        if not self.store.has_admins():
+            return
+        acting = self.store.maybe_user(actor)
+        if acting is None or not acting.is_admin:
+            raise Unauthorized(
+                f"{what} is for club officers, and {actor} is not one. Ask an officer"
+            )
+
+    def cancel(self, job_id: str, *, actor: str | None = None, admin: bool = False) -> Job:
+        """Stop a job and give back whatever it had not spent.
+
+        The ownership check is here rather than only in `gpu cancel` and the web
+        app, because this is the method that terminates a machine. Both callers
+        happened to check first and this one checked nothing, which made the
+        rule "every future caller remembers".
+
+        An officer may cancel for somebody -- a run whose owner has gone home is
+        exactly what the club needs to be able to stop -- and the reason written
+        into the job's history names who did it.
+        """
         job = self.store.find_job(job_id)
+        if actor is not None and actor != job.user_id and not admin:
+            # `admin=True` is for a door that establishes officer status some
+            # other way -- the web app's officers come from its own config, not
+            # from this table, and it would otherwise lose a power it has today.
+            acting = self.store.maybe_user(actor)
+            if acting is None or not acting.is_admin:
+                raise Unauthorized(
+                    f"job {job.short_id} belongs to {job.user_id}, not {actor}. "
+                    "Ask them, or ask an officer"
+                )
         if job.is_terminal:
             raise BrokerError(
                 f"job {job.short_id} is already {job.state.lower()}; nothing to cancel"
@@ -411,14 +466,29 @@ class Broker:
         backend = self.local_backend()
         return backend.health(refresh=refresh) if backend else []
 
-    def drain_host(self, hostname: str, reason: str, actor: str = "") -> None:
+    def drain_host(
+        self, hostname: str, reason: str, actor: str = "", *, admin: bool = False
+    ) -> None:
+        """Stop placing jobs on a lab host.
+
+        The officer check runs before the "is there a local pool" check on
+        purpose: a member should be told they are not an officer, rather than
+        told about the club's backend configuration.
+        """
+        self._require_officer(actor, "draining a host", admin=admin)
         backend = self.local_backend()
         if backend is None:
             raise BrokerError("the local pool is not configured; nothing to drain")
         backend.drain(hostname, reason)  # raises on an unknown host, before we write
         self.store.drain_host(hostname, reason, actor)
 
-    def undrain_host(self, hostname: str) -> None:
+    def undrain_host(self, hostname: str, actor: str = "", *, admin: bool = False) -> None:
+        """Let a host take jobs again. The twin of `drain_host`, and checked.
+
+        It used to take no actor at all, so a host an officer pulled out for a
+        fan swap was one any member could put straight back.
+        """
+        self._require_officer(actor, "undraining a host", admin=admin)
         backend = self.local_backend()
         if backend is None:
             raise BrokerError("the local pool is not configured")
@@ -579,8 +649,52 @@ class Broker:
 
     # ---------------------------------------------------------------- admin
 
-    def add_user(self, user_id: str, **kwargs) -> User:
+    def add_user(
+        self, user_id: str, *, actor: str | None = None, admin: bool = False, **kwargs
+    ) -> User:
+        """Create a member, or change one. Only `is_admin` is officer-only.
+
+        Promotion is the escalation that defeats every other check in this file.
+        An officer may cancel anybody's job, suspend anybody and drain any host,
+        so a member who can set their own `is_admin` already holds every power
+        the other checks protect -- and `cancel` reads exactly this column to
+        decide. Demotion is gated too: emptying the officer list is how you
+        reopen the bootstrap.
+
+        Budgets are not gated. This is also the method the web app's officer
+        page calls to change one, that page has its own officer check, and the
+        CLI has no authentication to gate against in the first place.
+        """
+        if kwargs.get("is_admin") is not None:
+            self._require_officer(actor, "changing who is an officer", admin=admin)
         return self.store.upsert_user(user_id, **kwargs)
 
     def users(self) -> list[User]:
         return self.store.list_users()
+
+    def suspend_user(
+        self, user_id: str, *, reason: str, actor: str | None, admin: bool = False
+    ) -> User:
+        """Take somebody off the pool. Queued work is held, not thrown away.
+
+        Nothing is cancelled here on purpose. A member removed by mistake on a
+        Friday keeps their queue position, and an officer who meant it can
+        cancel the jobs explicitly -- which is a decision with a name on it
+        rather than a side effect of an administrative click.
+
+        `actor` is checked here, not only in `gpu admin suspend`. It was already
+        being written into the record as the officer who did it, which made an
+        unchecked one worse than useless.
+        """
+        self._require_officer(actor, "suspending a member", admin=admin)
+        return self.store.suspend_user(user_id, reason=reason, actor=actor or "")
+
+    def restore_user(self, user_id: str, *, actor: str | None, admin: bool = False) -> User:
+        """Put a suspended member back.
+
+        Checked for the same reason as `suspend_user`, and more urgently: a
+        suspension the suspended member can lift is not a suspension, and every
+        held-job guarantee rests on this one.
+        """
+        self._require_officer(actor, "restoring a member", admin=admin)
+        return self.store.restore_user(user_id, actor=actor or "")

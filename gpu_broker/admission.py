@@ -21,7 +21,7 @@ from decimal import Decimal
 
 from .config import BrokerConfig
 from .errors import BrokerError
-from .models import Balance, Refusal
+from .models import Balance, Refusal, User
 from .money import ZERO, Currency, fmt, money, quantize
 
 
@@ -115,6 +115,24 @@ def check_queue_depth(config: BrokerConfig, queued: int) -> Refusal | None:
             f"refused: you already have {queued} jobs waiting, which is the limit "
             f"of {config.max_queued_jobs_per_user}. They go as capacity frees up; "
             f"cancel one with `gpu cancel` if you would rather submit this instead."
+        ),
+    )
+
+
+def check_membership(user: User) -> Refusal | None:
+    """Is this person still allowed to spend the club's money.
+
+    Refused rather than raised, so an officer can look up what a suspended
+    member tried to do and when. That is the whole reason a refusal is a row.
+    """
+    if not user.is_suspended:
+        return None
+    reason = user.suspended_reason or "no reason recorded"
+    return Refusal(
+        code="USER_SUSPENDED",
+        reason=(
+            f"refused: {user.user_id} is suspended from the pool ({reason}). "
+            f"Ask an officer to restore you with `gpu admin restore {user.user_id}`."
         ),
     )
 

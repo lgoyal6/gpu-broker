@@ -30,6 +30,20 @@ class IllegalTransition(BrokerError):
         self.to_state = to_state
 
 
+class Unauthorized(BrokerError):
+    """One identity tried to act on another's job, or on the club's money after
+    losing the right to.
+
+    Raised by the broker rather than by a door, because the doors are not the
+    thing that spends anything. `gpu cancel` and the web app both checked
+    ownership and then called a `Broker.cancel` that checked nothing, so the
+    rule was "every future caller remembers".
+    """
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+
+
 class UnknownJob(BrokerError):
     def __init__(self, job_id: str) -> None:
         super().__init__(f"no job with id {job_id!r}")
