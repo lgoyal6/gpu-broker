@@ -44,12 +44,29 @@ class Orphan:
     def attributable(self) -> bool:
         return bool(self.user_id)
 
+    @property
+    def cost_known(self) -> bool:
+        """Whether `burned` is a measurement or a placeholder.
+
+        Without a launch timestamp there is no way to say how long this has been
+        up, so `burned` falls out as $0.00. That number must never reach the
+        ledger: a row saying a running machine cost nothing is a stronger claim
+        than saying nothing at all, and it is false. The machine is reported,
+        loudly, with its cost named as unknown.
+        """
+        return self.launched_at is not None
+
     def describe(self) -> str:
         who = self.user_id or "nobody (untagged)"
         age = f"{self.age_hours:.1f}h" if self.launched_at else "unknown age"
+        burned = (
+            f"{fmt(self.burned, self.currency)} burned"
+            if self.cost_known
+            else "cost unknown (no launch time to measure from)"
+        )
         return (
             f"{self.backend}/{self.handle} ({self.gpu_type}) launched by {who}, "
-            f"{age} ago, {fmt(self.burned, self.currency)} burned: {self.reason}"
+            f"{age} ago, {burned}: {self.reason}"
         )
 
 

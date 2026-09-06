@@ -458,6 +458,83 @@ class Store:
                 (to_iso(now), job.job_id),
             )
 
+    def abandoned_for_handle(self, handle: str, currency: Currency) -> Decimal:
+        """What this machine has already been charged as abandoned."""
+        total = ZERO
+        for row in self.conn.execute(
+            "SELECT amount FROM ledger WHERE resource_handle = ? AND currency = ? "
+            "AND kind = 'ABANDONED'",
+            (handle, str(currency)),
+        ):
+            total += money(row["amount"])
+        return total
+
+    def record_abandoned(
+        self,
+        *,
+        handle: str,
+        job_id: str | None,
+        user_id: str | None,
+        currency: Currency,
+        burned: Decimal,
+        note: str,
+    ) -> Decimal:
+        """Charge capacity that billed with no completed work behind it.
+
+        `burned` is the total since the machine was launched, not the increment.
+        Reap runs on a schedule and every pass recomputes the same running
+        total, so the passes overlap; writing `burned` each time would charge a
+        single leaked instance once a day forever. Recording the difference
+        against what this handle already carries is the same derived-not-counted
+        trick accrual uses, and it makes a re-run cost nothing.
+
+        Returns what was actually written, which is zero on a repeat pass.
+        """
+        already = self.abandoned_for_handle(handle, currency)
+        delta = quantize(money(burned) - already, currency)
+        if delta <= ZERO:
+            return ZERO
+
+        # A job_id the jobs table has never heard of would violate the foreign
+        # key. An untagged machine, or one tagged for a job from a database that
+        # has since been rebuilt, is exactly the case this has to survive.
+        known = (
+            job_id
+            if job_id
+            and self.conn.execute(
+                "SELECT 1 FROM jobs WHERE job_id = ?", (job_id,)
+            ).fetchone()
+            else None
+        )
+        owner = (
+            user_id
+            if user_id
+            and self.conn.execute(
+                "SELECT 1 FROM users WHERE user_id = ?", (user_id,)
+            ).fetchone()
+            else None
+        )
+        with transaction(self.conn) as conn:
+            self._insert_ledger(
+                conn,
+                job_id=known,
+                user_id=owner,
+                currency=currency,
+                kind=LedgerKind.ABANDONED,
+                amount=delta,
+                at=self.clock.now(),
+                note=note,
+                resource_handle=handle,
+            )
+        return delta
+
+    def abandoned_entries(self, currency: Currency) -> list[LedgerEntry]:
+        rows = self.conn.execute(
+            "SELECT * FROM ledger WHERE kind = 'ABANDONED' AND currency = ? ORDER BY id",
+            (str(currency),),
+        ).fetchall()
+        return [_ledger_from_row(row) for row in rows]
+
     def get_job(self, job_id: str) -> Job:
         row = self.conn.execute(
             "SELECT * FROM jobs WHERE job_id = ?", (job_id,)
@@ -1112,16 +1189,18 @@ class Store:
         conn: sqlite3.Connection,
         *,
         job_id: str | None,
-        user_id: str,
+        user_id: str | None,
         currency: Currency,
         kind: LedgerKind,
         amount: Decimal,
         at: dt.datetime,
         note: str | None,
+        resource_handle: str | None = None,
     ) -> None:
         conn.execute(
-            "INSERT INTO ledger (job_id, user_id, currency, kind, amount, period, at, note) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO ledger "
+            "(job_id, user_id, currency, kind, amount, period, at, note, resource_handle) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 job_id,
                 user_id,
@@ -1131,6 +1210,7 @@ class Store:
                 billing_period(at, self.config.timezone),
                 to_iso(at),
                 note,
+                resource_handle,
             ),
         )
 
@@ -1229,4 +1309,5 @@ def _ledger_from_row(row: sqlite3.Row) -> LedgerEntry:
         period=row["period"],
         at=from_iso(row["at"]),
         note=row["note"],
+        resource_handle=row["resource_handle"],
     )

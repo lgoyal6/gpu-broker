@@ -21,6 +21,15 @@ class LedgerKind(StrEnum):
     """Part of a hold given back, because the job cost less than it reserved."""
     SETTLE = "SETTLE"
     """Capacity actually consumed. This is the number fair-share reads."""
+    ABANDONED = "ABANDONED"
+    """Capacity that billed with no completed work behind it.
+
+    A machine the broker launched and then lost track of, usually because it
+    died between `launch()` and the write that records the handle. The money is
+    as real as a settlement; what it bought is nothing anybody can point at.
+    Kept a separate kind so the two are never added up as if they were the same
+    thing.
+    """
 
 
 @dataclass(frozen=True)
@@ -127,13 +136,18 @@ class Job:
 class LedgerEntry:
     entry_id: int
     job_id: str | None
-    user_id: str
+    user_id: str | None
+    """None only for capacity nobody can be billed for: an untagged machine the
+    club paid for with no member behind it."""
     currency: Currency
     kind: LedgerKind
     amount: Decimal
     period: str
     at: dt.datetime
     note: str | None = None
+    resource_handle: str | None = None
+    """Which machine an ABANDONED row is about, so a repeated reap can charge
+    the delta rather than the whole burn again."""
 
 
 @dataclass(frozen=True)
