@@ -10,7 +10,7 @@ from __future__ import annotations
 import datetime as dt
 from decimal import Decimal
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from . import admission
@@ -179,6 +179,32 @@ class Broker:
         self.clock: Clock = store.clock
         self.prices = PriceBook(config, store.clock)
 
+    def _apply_prices(self) -> None:
+        """Point every money decision at the price book.
+
+        `refresh_prices` used to update the book and nothing else, so `gpu
+        prices` printed the number AWS had just given us while admission,
+        accrual, the ceiling check and `reap` all went on reading the table
+        typed in by hand in August. A club whose budget is enforced against a
+        price nobody is charged does not have a budget.
+
+        The config is frozen and rebuilt rather than mutated, and the rebuilt
+        one is handed to everything holding a reference, so there is exactly one
+        price in play at any moment.
+        """
+        book = self.prices.all()
+        self.config = replace(
+            self.config,
+            gpu_types=tuple(
+                replace(gpu, hourly_price=book[gpu.name].hourly)
+                if gpu.name in book
+                else gpu
+                for gpu in self.config.gpu_types
+            ),
+        )
+        self.store.config = self.config
+        self.scheduler.config = self.config
+
     # ----------------------------------------------------------------- setup
 
     @classmethod
@@ -209,6 +235,10 @@ class Broker:
             backends = build_backends(config, clock, environments=store.environment)
         broker = cls(store, backends, config, checkpoints)
         broker.prices = prices
+        # Before anything can be admitted. A restart that put the money path
+        # back on the builtin table would make every price refresh last only
+        # until the next deploy.
+        broker._apply_prices()
         broker._reapply_drains()
         return broker
 
@@ -404,6 +434,7 @@ class Broker:
             pricing_client = make_clients(self.config.aws)["pricing"]
         report = self.prices.refresh(pricing_client)
         self.store.save_prices(report.updated)
+        self._apply_prices()
         return report
 
     def forecast(self, currency: Currency = Currency.USD) -> Forecast:
