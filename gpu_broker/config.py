@@ -96,6 +96,42 @@ class BrokerConfig:
     max_job_gpu_hours: Decimal = money("24.00")
     max_job_hours: float = 24.0
 
+    # --- limits, so one member cannot take the broker down for everybody -----
+    #
+    # A reservation is already backpressure: on the default $25 a member gets 33
+    # queued a10g jobs before their own budget refuses them. The hole is that
+    # the reservation is whatever `--budget` says, and `--budget 0.01` turns
+    # that 33 into 2500. Measured, on a laptop, with the fake backend.
+    max_command_bytes: int = 4096
+    """A command is stored verbatim and then run in a shell on a GPU host.
+    Without this, a 10 MB `--command` was accepted and stored. Nothing anybody
+    types is close to this; a job that needs more wants a script in /data."""
+
+    max_queued_jobs_per_user: int = 32
+    """One under what the default budget already allows, so a member using
+    default budgets never meets this limit and a member using `--budget 0.01`
+    meets the same ceiling as everybody else. Every queued job costs about
+    20 kB of database (measured: 20,613 bytes/job over 200 submissions) and is
+    re-scored on every tick, so the cost lands on everybody. Measured on this
+    laptop: a tick against an empty queue took 0.8 ms and against 4,000 queued
+    jobs took 140 ms. Wall-clock figures move with what else the machine is
+    doing; the shape -- superlinear in queue depth, paid by every member -- is
+    what the limit is for."""
+
+    max_running_jobs_per_user: int = 4
+    """How many machines one member may hold at once. Measured without it: one
+    member took 63 of 64 free slots in a single tick. Over the limit a job
+    *waits* rather than being refused -- it keeps its queue place and goes as
+    soon as one of that member's jobs finishes."""
+
+    max_log_lines_per_job: int = 10_000
+    max_log_line_bytes: int = 2_000
+    """A job that prints is otherwise never told to stop: 20,000 lines of 200
+    bytes grew the database by 10.7 MB, and a single 5 MB line was stored as
+    5 MB. Together these cap one job at about 20 MB. That is a loose bound --
+    a real byte budget wants a counter on the job row rather than a COUNT(*)
+    per poll -- but it is finite, which is the property that was missing."""
+
     startup_allowance_hours: float = 0.25
     """Billing starts when the broker takes capacity, not when the user's command
     does, because that is when a cloud instance starts charging. So the default
@@ -254,6 +290,18 @@ class BrokerConfig:
             )
         if self.startup_allowance_hours < 0:
             raise ConfigError("startup_allowance_hours cannot be negative")
+        for name in (
+            "max_command_bytes",
+            "max_queued_jobs_per_user",
+            "max_running_jobs_per_user",
+            "max_log_lines_per_job",
+            "max_log_line_bytes",
+        ):
+            # Zero is not "no limit" here, it is "nothing may ever run". A
+            # config that means to lift a limit should say a large number, so
+            # that a typo cannot silently stop the club.
+            if getattr(self, name) < 1:
+                raise ConfigError(f"{name} must be at least 1")
         if self.age_max_hours <= 0:
             raise ConfigError("age_max_hours must be positive")
         if self.fairshare_half_life_days <= 0:
@@ -283,6 +331,11 @@ _OVERRIDABLE = {
     "max_job_usd": money,
     "max_job_gpu_hours": money,
     "max_job_hours": float,
+    "max_command_bytes": int,
+    "max_queued_jobs_per_user": int,
+    "max_running_jobs_per_user": int,
+    "max_log_lines_per_job": int,
+    "max_log_line_bytes": int,
     "startup_allowance_hours": float,
     "backends": list,
     "placement_order": list,

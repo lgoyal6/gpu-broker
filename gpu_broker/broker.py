@@ -273,7 +273,7 @@ class Broker:
         The order is: validate, then check policy, then write. A refusal is
         recorded as a REFUSED job so it can be looked up later; a typo is not.
         """
-        admission.validate_request(self.config, gpu_type, hours)
+        admission.validate_request(self.config, gpu_type, hours, command)
         gpu = self.config.gpu(gpu_type)
         currency = gpu.currency
 
@@ -292,6 +292,10 @@ class Broker:
             )
 
         refusal = admission.check_job_cap(self.config, currency, reserved)
+        if refusal is None:
+            refusal = admission.check_queue_depth(
+                self.config, self.store.queued_count(user_id)
+            )
         if refusal is None:
             balance = self.store.balance(user_id, currency)
             refusal = admission.check_user_budget(balance, reserved)

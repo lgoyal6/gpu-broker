@@ -25,7 +25,9 @@ from .models import Balance, Refusal
 from .money import ZERO, Currency, fmt, money, quantize
 
 
-def validate_request(config: BrokerConfig, gpu_type: str, hours: float) -> None:
+def validate_request(
+    config: BrokerConfig, gpu_type: str, hours: float, command: str = ""
+) -> None:
     """Reject nonsense before anything is written. Raises, does not refuse."""
     config.gpu(gpu_type)  # raises UnknownGpuType with the list of known types
     if hours <= 0:
@@ -34,6 +36,15 @@ def validate_request(config: BrokerConfig, gpu_type: str, hours: float) -> None:
         raise BrokerError(
             f"--hours {hours:g} exceeds the per-job limit of "
             f"{config.max_job_hours:g}h. Split the run, or checkpoint and resubmit."
+        )
+    if len(command) > config.max_command_bytes:
+        # Raises rather than refusing on purpose. A recorded refusal keeps the
+        # command, so recording a ten-megabyte one is the damage the limit
+        # exists to prevent.
+        raise BrokerError(
+            f"the command is {len(command):,} characters, over the limit of "
+            f"{config.max_command_bytes:,}. Put it in a script under /data and "
+            f"submit the script."
         )
 
 
@@ -81,6 +92,31 @@ def check_job_cap(
             currency=currency,
         )
     return None
+
+
+def check_queue_depth(config: BrokerConfig, queued: int) -> Refusal | None:
+    """How many jobs one member may have waiting at once.
+
+    A second mechanism doing the budget's job, which NOTES.md says to be
+    suspicious of, and it is here because the budget's version of this can be
+    dodged: a reservation is whatever `--budget` says, so `--budget 0.01` turns
+    the 33 queued jobs a $25 budget allows into 2500. The limit is set just
+    under what the default budget already permits, so it bites the dodge and
+    nothing else.
+
+    Refused, not raised: this one is worth a record. A member who hits it
+    repeatedly is the thing an officer wants to be able to look up.
+    """
+    if queued < config.max_queued_jobs_per_user:
+        return None
+    return Refusal(
+        code="QUEUE_DEPTH_EXCEEDED",
+        reason=(
+            f"refused: you already have {queued} jobs waiting, which is the limit "
+            f"of {config.max_queued_jobs_per_user}. They go as capacity frees up; "
+            f"cancel one with `gpu cancel` if you would rather submit this instead."
+        ),
+    )
 
 
 def check_user_budget(balance: Balance, reserved: Decimal) -> Refusal | None:

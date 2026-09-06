@@ -622,6 +622,7 @@ def tick(
         ("stopped at ceiling", report.stopped_at_ceiling),
         ("waiting on pool cap", report.blocked_on_pool_cap),
         ("waiting on capacity", report.blocked_on_capacity),
+        ("waiting on their own limit", report.blocked_on_tenant),
     ):
         if items:
             parts.append(f"{label}: {', '.join(item[:8] for item in items)}")

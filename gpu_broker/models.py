@@ -272,7 +272,7 @@ class Decision:
 
     job: "Job"
     action: str
-    """DISPATCH, BLOCKED_POOL, or BLOCKED_CAPACITY."""
+    """DISPATCH, BLOCKED_POOL, BLOCKED_CAPACITY, or BLOCKED_TENANT."""
     backend: str | None
     detail: str
 
@@ -306,4 +306,7 @@ class TickReport:
     settled: tuple[str, ...] = ()
     blocked_on_pool_cap: tuple[str, ...] = ()
     blocked_on_capacity: tuple[str, ...] = ()
+    blocked_on_tenant: tuple[str, ...] = ()
+    """Waiting on their own owner rather than on the pool: that member is
+    already holding `max_running_jobs_per_user` machines."""
     stopped_at_ceiling: tuple[str, ...] = ()
