@@ -610,8 +610,33 @@ class Broker:
         return [period for period, _, _ in rows]
 
     def reap(self) -> ReapReport:
-        """Machines that are alive with no live job behind them. Reports only."""
-        return reap(self.store, self.scheduler.backends, self.config, self.clock)
+        """Machines that are alive with no live job behind them.
+
+        Terminates nothing, as it never has. It does now write down what each
+        one has burned, because a number the broker can compute and does not
+        record is a number the club cannot act on: the ledger read $0.00 while
+        AWS billed for every hour a leaked instance stayed up.
+
+        Bookkeeping, not cleanup. Whether to kill the machine is still a
+        person's call.
+        """
+        report = reap(self.store, self.scheduler.backends, self.config, self.clock)
+        for orphan in report.orphans:
+            if not orphan.cost_known:
+                # No launch time, so `burned` is $0.00 by default rather than by
+                # measurement. Writing that down would put "this machine was
+                # free" in the ledger, which is a confident wrong answer where
+                # the honest one is the report saying the cost is unknown.
+                continue
+            self.store.record_abandoned(
+                handle=orphan.handle,
+                job_id=orphan.job_id,
+                user_id=orphan.user_id,
+                currency=orphan.currency,
+                burned=orphan.burned,
+                note=f"{orphan.backend}/{orphan.handle} ({orphan.gpu_type}): {orphan.reason}",
+            )
+        return report
 
     # ----------------------------------------------------------------- reads
 

@@ -6,7 +6,7 @@ from decimal import Decimal
 
 import pytest
 
-from gpu_broker.money import Currency, billing_period, money
+from gpu_broker.money import ZERO, Currency, billing_period, money
 from gpu_broker.states import JobState
 
 import datetime as dt
@@ -156,3 +156,109 @@ def test_the_ledger_is_append_only(broker, users):
         text=True,
     ).stdout
     assert hits == "", f"something mutates the ledger:\n{hits}"
+
+
+# ------------------------------------- capacity that billed with nothing behind it
+
+
+def test_a_leaked_machine_puts_its_burn_in_the_ledger(broker, users, clock):
+    """A crash between `backend.launch()` and the store write leaves a real
+    instance billing with the job still QUEUED.
+
+    `reap` already computes the number and names the member. It was never
+    written down, so the club's own ledger said $0.00 while AWS billed for four
+    hours. Real spend that no completed work can be attributed to still has to
+    appear, or "spent" is not a number anybody can act on.
+    """
+    cloud = broker.scheduler.backend("cloud")
+    cloud.leak(job_id="c" * 32, user_id="ana")
+    clock.advance(hours=4)
+
+    assert broker.budgets("ana")[Currency.USD].spent == ZERO
+    broker.reap()
+
+    # 4h of a10g at the builtin $1.006.
+    assert broker.budgets("ana")[Currency.USD].spent == Decimal("4.02")
+
+
+def test_reaping_the_same_machine_twice_does_not_charge_for_it_twice(
+    broker, users, clock
+):
+    """`reap` runs on a schedule. It computes burn since launch, so a second
+    pass over a machine that is still up recomputes a number that overlaps
+    everything the first pass recorded. Charging that again is how a daily job
+    turns one leaked instance into a month of phantom spend."""
+    cloud = broker.scheduler.backend("cloud")
+    cloud.leak(job_id="c" * 32, user_id="ana")
+
+    clock.advance(hours=4)
+    broker.reap()
+    after_first = broker.budgets("ana")[Currency.USD].spent
+    broker.reap()
+    broker.reap()
+    assert broker.budgets("ana")[Currency.USD].spent == after_first
+
+    # Still burning, so the next hour is charged once and only once.
+    clock.advance(hours=1)
+    broker.reap()
+    assert broker.budgets("ana")[Currency.USD].spent == after_first + Decimal("1.01")
+
+
+def test_abandoned_spend_is_its_own_kind_not_disguised_as_settlement(
+    broker, users, clock
+):
+    """Settled spend bought something. Abandoned spend bought nothing anybody
+    can point at. Merging the two makes "what did we get for the money" an
+    unanswerable question, so the row says which it is."""
+    from gpu_broker.models import LedgerKind
+
+    cloud = broker.scheduler.backend("cloud")
+    cloud.leak(job_id="c" * 32, user_id="ana")
+    clock.advance(hours=2)
+    broker.reap()
+
+    kinds = [
+        entry.kind
+        for entry in broker.store.abandoned_entries(Currency.USD)
+    ]
+    assert kinds == [LedgerKind.ABANDONED]
+
+
+def test_a_machine_with_no_launch_time_is_reported_unknown_never_as_free(
+    broker, users, clock
+):
+    """An untagged instance has no timestamp to measure from, so the burn
+    calculation returns $0.00 by default rather than by measurement.
+
+    Writing that to the ledger would record "this running machine cost nothing",
+    which is a confident wrong answer where the honest one is "we cannot tell".
+    It stays out of the ledger and stays in the report.
+    """
+    cloud = broker.scheduler.backend("cloud")
+    handle = cloud.leak(job_id="c" * 32, user_id="ana")
+    cloud._resources[handle].tags = {}
+    clock.advance(hours=3)
+
+    report = broker.reap()
+    orphan = report.orphans[0]
+    assert not orphan.cost_known
+    assert "cost unknown" in orphan.describe()
+
+    # No fabricated row, in either direction.
+    assert broker.store.abandoned_entries(Currency.USD) == []
+    assert broker.pool()[Currency.USD].spent == ZERO
+
+
+def test_an_abandoned_machine_is_charged_to_the_member_who_launched_it(
+    broker, users, clock
+):
+    """Attribution is the point. Spend the pool cannot trace to a person is
+    spend nobody changes their behaviour over."""
+    cloud = broker.scheduler.backend("cloud")
+    cloud.leak(job_id="c" * 32, user_id="bo")
+    clock.advance(hours=2)
+    broker.reap()
+
+    assert broker.budgets("bo")[Currency.USD].spent == Decimal("2.01")
+    assert broker.budgets("ana")[Currency.USD].spent == ZERO
+    assert broker.pool()[Currency.USD].spent == Decimal("2.01")
