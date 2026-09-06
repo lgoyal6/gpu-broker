@@ -1037,7 +1037,14 @@ def web(
             help="Serve ONLY the status page. No sign-in, no submit, no admin.",
         ),
     ] = False,
-    state_dir: Annotated[Optional[str], typer.Option("--state-dir", hidden=True)] = None,
+    # Visible here and hidden on every other command on purpose. This is the
+    # one place a reader is told to type it: `gpu demo seed` prints it, and
+    # the README serves the demo database with it. A flag the tool itself
+    # tells you to use should survive `gpu web --help`.
+    state_dir: Annotated[
+        Optional[str],
+        typer.Option("--state-dir", help="Serve a database other than the default, e.g. the one `gpu demo seed` writes."),
+    ] = None,
 ) -> None:
     try:
         import uvicorn
