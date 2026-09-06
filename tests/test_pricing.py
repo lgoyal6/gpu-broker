@@ -207,3 +207,74 @@ def test_a_price_for_a_gpu_type_nobody_configured_is_not_resurrected(broker, clo
     )
     broker.prices.load(broker.store.prices())
     assert "h100" not in broker.prices.all()
+
+
+# ------------------------------------------------- the price the club is charged
+
+
+def test_a_refreshed_price_governs_what_a_job_reserves(broker, users):
+    """A refresh that nobody's budget can see is a display feature.
+
+    `gpu prices` printed $3.00/h while admission went on reserving at the
+    builtin $1.006/h, so the budget was enforced against a number the club is
+    not charged. The reservation has to move with the price.
+    """
+    broker.refresh_prices(PricingDouble([listing("3.0000000000")]))
+    assert broker.prices.hourly("a10g") == Decimal("3.0000000000")
+
+    job = broker.submit(
+        user_id="ana", command="python train.py", gpu_type="a10g", hours=2.0
+    ).job
+    # 2h of run time plus the 0.25h startup allowance, at the refreshed price.
+    assert job.reserved == Decimal("6.75")
+
+
+def test_a_refreshed_price_governs_what_a_running_job_is_charged(broker, users, clock):
+    """Accrual read the same stale table admission did, so a job that AWS was
+    billing at $3.00/h settled at $1.006/h and the ledger under-reported the
+    club's real spend for as long as the job ran."""
+    broker.refresh_prices(PricingDouble([listing("3.0000000000")]))
+    broker.submit(
+        user_id="ana", command="python train.py", gpu_type="a10g", hours=4.0,
+        budget="20.00",
+    )
+    broker.tick()
+    clock.advance(hours=1)
+    broker.tick()
+
+    spent = broker.budgets("ana")[Currency.USD].spent
+    assert spent == Decimal("3.00"), f"one hour at $3.00/h settled as {spent}"
+
+
+def test_a_refreshed_price_survives_into_the_money_path_after_a_restart(
+    broker, state_dir, clock, cloud, lab
+):
+    """The price is reloaded from disk at startup, so the restart must not
+    quietly put admission back on the builtin table."""
+    from gpu_broker.broker import Broker
+    from gpu_broker.config import load_config
+
+    broker.refresh_prices(PricingDouble([listing("3.0000000000")]))
+    broker.add_user("ana")
+    broker.close()
+
+    restarted = Broker.open(
+        state_dir, clock=clock, backends=[cloud, lab], config=load_config(state_dir)
+    )
+    job = restarted.submit(
+        user_id="ana", command="python train.py", gpu_type="a10g", hours=2.0
+    ).job
+    assert job.reserved == Decimal("6.75")
+    restarted.close()
+
+
+def test_a_price_the_refresh_could_not_reach_stays_on_the_builtin_number(broker, users):
+    """Partial failure is the normal case. A type AWS would not price keeps the
+    builtin number rather than becoming unpriceable, and says so."""
+    broker.refresh_prices(PricingDouble(error=RuntimeError("pricing API down")))
+    assert broker.prices.price("a10g").source == "builtin"
+
+    job = broker.submit(
+        user_id="ana", command="python train.py", gpu_type="a10g", hours=2.0
+    ).job
+    assert job.reserved == Decimal("2.26")  # 2.25h at the builtin $1.006
