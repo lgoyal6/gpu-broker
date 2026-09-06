@@ -13,7 +13,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from . import admission
+from . import admission, tracing
 from .aws import make_clients
 from .backends.base import Backend
 from .backends.ec2 import Ec2Backend
@@ -318,16 +318,23 @@ class Broker:
             )
             return SubmitResult(job=job, refusal=refusal)
 
-        job = self.store.create_job(
-            user_id=user_id,
-            command=command,
-            gpu_type=gpu_type,
-            requested_hours=hours,
-            currency=currency,
-            reserved=reserved,
-            environment=environment,
-            origin=origin,
-        )
+        with tracing.span("queue.enqueue", kind="producer",
+                          gpu_type=gpu_type, requested_hours=hours,
+                          command=command) as span:
+            job = self.store.create_job(
+                user_id=user_id,
+                command=command,
+                gpu_type=gpu_type,
+                requested_hours=hours,
+                currency=currency,
+                reserved=reserved,
+                environment=environment,
+                origin=origin,
+            )
+            span.set_attribute("job_id", job.job_id)
+            # The queue hop. `gpu run` is a different process and may not be
+            # running yet; the row is the only thing that reaches it.
+            tracing.record_queue_context(self.store.conn, job.job_id, self.store.clock.now())
         return SubmitResult(
             job=job,
             warning=admission.ceiling_warning(self.config, gpu_type, hours, reserved),

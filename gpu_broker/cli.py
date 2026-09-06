@@ -1081,6 +1081,12 @@ def web(
     except BrokerError as exc:
         die(str(exc))
 
+    # No-op unless OTEL_EXPORTER_OTLP_ENDPOINT is set, so the default `gpu web`
+    # is unchanged and nobody needs a collector to serve a page.
+    from . import tracing
+
+    tracing.setup("gpu-broker-web")
+
     console.print(
         f"[dim]serving on http://{host}:{port} -- this process holds no AWS "
         f"credentials and launches nothing. Run `gpu run` alongside it.[/dim]"
@@ -1095,6 +1101,12 @@ def run(
     interval: Annotated[float, typer.Option("--interval", help="Seconds between passes.")] = 10.0,
     state_dir: Annotated[Optional[str], typer.Option("--state-dir", hidden=True)] = None,
 ) -> None:
+    from . import tracing
+
+    # The other half of the pair. Same no-op rule as `gpu web`; when both have
+    # an endpoint, a submission and the dispatch that acts on it are one trace.
+    tracing.setup("gpu-broker-scheduler")
+
     broker = open_broker(state_dir)
     console.print(f"[dim]scheduling every {interval:g}s. ctrl-c to stop.[/dim]")
 
@@ -1124,6 +1136,11 @@ def run(
     except KeyboardInterrupt:
         console.print("\n[dim]stopped. Jobs keep running; state is on disk.[/dim]")
         raise typer.Exit(code=0)
+    finally:
+        # In the `finally`, because ctrl-c is the normal way this ends and a
+        # batch processor that only flushes on its own timer would lose the
+        # last trace of every run -- which is the one somebody is looking for.
+        tracing.flush()
     dispatched = sum(len(report.dispatched) for report in reports)
     finished = sum(len(report.completed) + len(report.failed) for report in reports)
     console.print(f"queue drained. dispatched {dispatched}, finished {finished}.")

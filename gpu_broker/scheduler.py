@@ -24,6 +24,7 @@ from collections.abc import Iterator
 from dataclasses import replace
 from decimal import Decimal
 
+from . import tracing
 from .backends.base import Backend, BackendStatus
 from .checkpoint import CheckpointStore
 from .config import BrokerConfig
@@ -79,13 +80,30 @@ class Scheduler:
             elif outcome.final_state in (JobState.FAILED, JobState.CANCELLED):
                 failed.append(job.job_id)
 
-        (
-            dispatched,
-            blocked_pool,
-            blocked_capacity,
-            blocked_tenant,
-            blocked_auth,
-        ) = self._dispatch(now)
+        # A tick is one worker's pass over whatever happens to be queued. The
+        # jobs in it arrived from unrelated requests, so a dispatch that found a
+        # parked submit context reparents onto *that* rather than onto this
+        # tick: otherwise two strangers' submissions fuse into one trace. Only a
+        # job with no parked context stays a child of the tick, which is the
+        # honest reading of "nobody was tracing when this arrived".
+        with tracing.span("scheduler.tick") as tick_span:
+            (
+                dispatched,
+                blocked_pool,
+                blocked_capacity,
+                blocked_tenant,
+                blocked_auth,
+            ) = self._dispatch(now)
+            # Every outcome the tick can produce, or the span reports a tick
+            # that dispatched nothing and blocked nothing while a member sat
+            # suspended.
+            tick_span.set_attributes({
+                "dispatched.length": len(dispatched),
+                "blocked_pool.length": len(blocked_pool),
+                "blocked_capacity.length": len(blocked_capacity),
+                "blocked_tenant.length": len(blocked_tenant),
+                "blocked_authorization.length": len(blocked_auth),
+            })
 
         # After dispatch, so the gauges describe the state this tick left behind
         # rather than the one it found. Failures here must not take down a tick:
@@ -583,46 +601,77 @@ class Scheduler:
 
         for decision, backend in self.decisions(now):
             job = decision.job
-            if decision.action == "BLOCKED_UNAUTHORIZED":
-                blocked_auth.append(job.job_id)
-                continue
-            if decision.action == "BLOCKED_POOL":
-                blocked_pool.append(job.job_id)
-                continue
-            if decision.action == "BLOCKED_TENANT":
-                blocked_tenant.append(job.job_id)
-                continue
-            if decision.action == "BLOCKED_CAPACITY" or backend is None:
-                blocked_capacity.append(job.job_id)
-                continue
+            # The consumer half of the queue hop. Parented on the context the
+            # submitting process parked on this row, so a dispatch that happens
+            # in another process minutes later is still the same trace as the
+            # POST that queued it. `parent=None` when the job predates the
+            # trace_context table or tracing was off at submit; the span is then
+            # simply a root, which is the honest reading of "nobody was
+            # watching when this arrived".
+            parent = tracing.queue_context(self.store.conn, job.job_id)
+            with tracing.span(
+                "queue.dispatch", kind="consumer", parent=parent,
+                job_id=job.job_id, gpu_type=job.gpu_type,
+                queue_wait_hours=round(job.wait_hours(now), 6),
+                decision=decision.action,
+            ) as span:
+                if decision.action == "BLOCKED_UNAUTHORIZED":
+                    span.set_attribute("outcome", "blocked_authorization")
+                    blocked_auth.append(job.job_id)
+                    continue
+                if decision.action == "BLOCKED_POOL":
+                    span.set_attribute("outcome", "blocked_pool")
+                    blocked_pool.append(job.job_id)
+                    continue
+                if decision.action == "BLOCKED_TENANT":
+                    span.set_attribute("outcome", "blocked_tenant")
+                    blocked_tenant.append(job.job_id)
+                    continue
+                if decision.action == "BLOCKED_CAPACITY" or backend is None:
+                    span.set_attribute("outcome", "blocked_capacity")
+                    blocked_capacity.append(job.job_id)
+                    continue
 
-            try:
-                allocation = backend.launch(job)
-            except BackendError as exc:
-                self.store.append_log(job.job_id, "broker", f"launch failed: {exc}")
-                blocked_capacity.append(job.job_id)
-                continue
+                span.set_attribute("backend", backend.name)
+                try:
+                    with tracing.span("backend.launch", kind="client",
+                                      backend=backend.name, gpu_type=job.gpu_type):
+                        allocation = backend.launch(job)
+                except BackendError as exc:
+                    # Caught, not propagated: the job goes back in the queue.
+                    # The span has to be told, or it records ok for a dispatch
+                    # that never got a machine.
+                    # `error_message`, not `reason`: a reason is a payload and
+                    # gets shaped away, and shaping away the one sentence that
+                    # says why the launch failed defeats the point. It is
+                    # scrubbed and truncated on the way through instead.
+                    span.failed("launch_failed", error_type=type(exc).__name__,
+                                error_message=str(exc))
+                    self.store.append_log(job.job_id, "broker", f"launch failed: {exc}")
+                    blocked_capacity.append(job.job_id)
+                    continue
 
-            job = self.store.record_attempt(job)
-            self.store.transition(
-                job,
-                JobState.ALLOCATING,
-                reason=(
-                    f"placed on {backend.name} ({allocation.handle})"
-                    + (f", attempt {job.attempts}" if job.attempts > 1 else "")
-                ),
-                backend=backend.name,
-                backend_handle=allocation.handle,
-            )
-            self.store.append_log(
-                job.job_id,
-                "broker",
-                f"dispatched to {backend.name}/{allocation.handle} on {job.gpu_type}",
-            )
-            # The reasoning, not just the outcome. When somebody asks why their
-            # job cost money, the answer is on their own job's log.
-            self.store.append_log(job.job_id, "broker", f"placement: {decision.detail}")
-            dispatched.append(job.job_id)
+                job = self.store.record_attempt(job)
+                self.store.transition(
+                    job,
+                    JobState.ALLOCATING,
+                    reason=(
+                        f"placed on {backend.name} ({allocation.handle})"
+                        + (f", attempt {job.attempts}" if job.attempts > 1 else "")
+                    ),
+                    backend=backend.name,
+                    backend_handle=allocation.handle,
+                )
+                self.store.append_log(
+                    job.job_id,
+                    "broker",
+                    f"dispatched to {backend.name}/{allocation.handle} on {job.gpu_type}",
+                )
+                # The reasoning, not just the outcome. When somebody asks why their
+                # job cost money, the answer is on their own job's log.
+                self.store.append_log(job.job_id, "broker", f"placement: {decision.detail}")
+                span.set_attribute("outcome", "dispatched")
+                dispatched.append(job.job_id)
 
         return (
             dispatched,

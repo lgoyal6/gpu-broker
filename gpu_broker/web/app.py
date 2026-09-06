@@ -25,6 +25,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from .. import tracing
 from ..broker import Broker
 from ..clock import SystemClock
 from ..config import BrokerConfig, load_config
@@ -149,6 +150,40 @@ def create_app(
         )
 
     app.state.page = page
+
+    @app.middleware("http")
+    async def trace_request(request: Request, call_next):
+        """The entry span, and the only place a caller's own trace context is
+        picked up.
+
+        Renamed to the route *template* after routing has happened, because a
+        span named `GET /jobs/9f2c1a` makes every job its own operation in the
+        viewer's dropdown and the list stops being usable after a week. The
+        concrete path stays on `url.path`, where high cardinality is free.
+        Routing happens inside `call_next`, so the template is not known until
+        after it returns; the span therefore starts under the raw path and is
+        corrected.
+        """
+        parent = request.headers.get("traceparent")
+        with tracing.span(
+            f"{request.method} {request.url.path}", kind="server", parent=parent,
+            **{"http.request.method": request.method,
+               "url.path": request.url.path},
+        ) as span:
+            response = await call_next(request)
+            route = request.scope.get("route")
+            if getattr(route, "path", None):
+                span.update_name(f"{request.method} {route.path}")
+                span.set_attribute("http.route", route.path)
+            span.set_attribute("http.response.status_code", response.status_code)
+            if response.status_code >= 500:
+                span.failed(f"http_{response.status_code}")
+            # So an operator reading a 500 in the access log can go straight to
+            # the trace instead of guessing which one it was.
+            trace_id = span.trace_id
+            if trace_id:
+                response.headers["x-trace-id"] = trace_id
+            return response
 
     @app.exception_handler(401)
     async def needs_sign_in(request: Request, exc: HTTPException):
