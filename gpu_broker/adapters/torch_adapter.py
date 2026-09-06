@@ -24,12 +24,26 @@ STATE_FILE = "checkpoint.pt"
 
 
 class Checkpointer:
-    """Saves and restores model, optimizer, scheduler, RNG state, and position.
+    """Saves and restores model, optimizer, scheduler, RNG state, and step.
 
-    RNG state is in there deliberately. Without it a resumed run sees a
-    different data order and different dropout masks from the run it is
-    continuing, and "resumed jobs produce the same final state as uninterrupted
-    ones" quietly stops being true.
+    RNG state is in there deliberately. Without it a resumed run sees different
+    dropout masks from the run it is continuing.
+
+    It is *not* enough for the data order, and that is a limit rather than a
+    bug here: a `DataLoader` with `shuffle=True` draws its permutation once, at
+    the top of the epoch, and the RNG state this restores is the one the
+    training steps had advanced to by the time the notice arrived. So a resumed
+    run redraws the permutation and starts it from the beginning. Measured on
+    this repo's own recovery harness: 200 steps, interrupted at 110, the
+    resumed run matched the uninterrupted control on the first 111 batches and
+    on none of the rest, and its final parameters landed 4.8% away.
+
+    A loop that needs the data order back gives the loader its own
+    `torch.Generator` and puts that generator's epoch-start state and its
+    position in the epoch into `extra`. A separate generator is the point:
+    rewinding the global RNG far enough to redraw the permutation would rewind
+    the dropout masks with it. With that done the same run came back
+    bit-identical. `tests/test_recovery.py` pins both halves.
     """
 
     def __init__(
