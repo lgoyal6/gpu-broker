@@ -153,3 +153,38 @@ gpu metrics --prune      # drop series past the retention window
 
 The web app serves `/metrics` in Prometheus format, and it is **off unless
 `GPU_BROKER_METRICS_TOKEN` is set**. Those series name people and jobs.
+
+## Tracing
+
+A submission and the dispatch that acts on it happen in two processes with a
+queue between them, so "which of the three waits was it" - the API call, the
+queue, or SQLite - has no answer from either process's own logs. Point both at a
+collector and it does:
+
+```bash
+docker run -d --name jaeger -p 16686:16686 -p 4318:4318 \
+  -e COLLECTOR_OTLP_ENABLED=true jaegertracing/all-in-one
+
+pip install 'gpu-broker[otel]'
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
+gpu web &        # POST /submit  ->  queued row
+gpu run          # picks it up, asks a backend, writes the result back
+```
+
+Both processes have to have the variable set, or you get half a trace. With it
+unset - the default - nothing is installed and a span costs a dict lookup, so
+this is not something you turn off for production.
+
+Every response carries `x-trace-id`, so a 500 in the access log leads straight
+to the trace rather than to a guess about which request it was.
+
+Two things are deliberate and worth knowing before you add a span:
+
+- **Job ids go on spans, never on metrics.** A job id is what lets you find the
+  one request; the same string as a Prometheus label is a new time series per
+  job, forever. `gpu_broker.tracing.FORBIDDEN_METRIC_LABELS` lists the names,
+  and `tests/test_tracing.py` asserts none of them reach the scrape body.
+- **Commands never become attributes.** A job command is a shell line somebody
+  typed and `--hf-token=hf_...` in it is not hypothetical, so only its first
+  word and its length are recorded, and every string attribute passes the
+  scrubber on the way through.
