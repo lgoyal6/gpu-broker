@@ -31,6 +31,19 @@ class User:
     budget_gpu_hours: Decimal
     is_admin: bool
     created_at: dt.datetime
+    suspended_at: dt.datetime | None = None
+    """Set when an officer takes somebody off the club's capacity.
+
+    Here rather than in the web app because `gpu run` is what spends the money
+    and it never imports FastAPI. A check only the web app can make is a check
+    the scheduler cannot make.
+    """
+    suspended_reason: str = ""
+    suspended_by: str = ""
+
+    @property
+    def is_suspended(self) -> bool:
+        return self.suspended_at is not None
 
     def budget(self, currency: Currency) -> Decimal:
         return (
@@ -272,7 +285,8 @@ class Decision:
 
     job: "Job"
     action: str
-    """DISPATCH, BLOCKED_POOL, BLOCKED_CAPACITY, or BLOCKED_TENANT."""
+    """DISPATCH, BLOCKED_POOL, BLOCKED_CAPACITY, BLOCKED_TENANT, or
+    BLOCKED_UNAUTHORIZED."""
     backend: str | None
     detail: str
 
@@ -309,4 +323,11 @@ class TickReport:
     blocked_on_tenant: tuple[str, ...] = ()
     """Waiting on their own owner rather than on the pool: that member is
     already holding `max_running_jobs_per_user` machines."""
+    blocked_on_authorization: tuple[str, ...] = ()
+    """Held because the member who submitted them is suspended.
+
+    Separate from `blocked_on_tenant` because they are separate answers to "why
+    did my job not start": one is a resource limit that will clear on its own,
+    the other needs an officer. A tick that reported them together would tell
+    somebody to wait for capacity that was never the problem."""
     stopped_at_ceiling: tuple[str, ...] = ()

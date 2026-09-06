@@ -192,6 +192,33 @@ class Membership:
             f"{identity.login} is not on the club allowlist. Ask an officer to add you"
         )
 
+    def recheck(self, login: str) -> None:
+        """The same question, asked on every request instead of once.
+
+        `check` runs at sign-in. A session lasts fourteen days, so on its own it
+        means somebody removed from the club keeps spending for two weeks.
+
+        What can be re-asked offline is the allowlist: it is a file or a config
+        value, and reading it costs a stat. Org membership cannot -- answering
+        it needs the person's GitHub token, which is exchanged once at sign-in
+        and deliberately not kept. So a deployment configured against an org
+        only gets the check at sign-in, and the enforcement that does work there
+        is suspension in the users table, which `gpu run` can also see.
+
+        Raises AuthError, the same as `check`, so callers handle one thing.
+        """
+        if self.config.github_org:
+            # An org member need not be on the allowlist at all -- `check` lets
+            # them in on the org alone -- so an allowlist miss here would prove
+            # nothing and would lock out everybody who signed in that way.
+            return
+        if login.lower() in self.allowed_logins():
+            return
+        raise AuthError(
+            f"{login} is no longer on the club allowlist. "
+            "Ask an officer to add you back"
+        )
+
     def is_admin(self, login: str) -> bool:
         return login.lower() in {admin.lower() for admin in self.config.admins}
 

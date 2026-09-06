@@ -623,6 +623,7 @@ def tick(
         ("waiting on pool cap", report.blocked_on_pool_cap),
         ("waiting on capacity", report.blocked_on_capacity),
         ("waiting on their own limit", report.blocked_on_tenant),
+        ("held: owner suspended", report.blocked_on_authorization),
     ):
         if items:
             parts.append(f"{label}: {', '.join(item[:8] for item in items)}")
@@ -1155,15 +1156,20 @@ def admin_add_user(
     usd: Annotated[Optional[str], typer.Option("--usd", help="Monthly dollar budget.")] = None,
     gpu_hours: Annotated[Optional[str], typer.Option("--gpu-hours")] = None,
     admin: Annotated[bool, typer.Option("--admin")] = False,
+    user_opt: Annotated[Optional[str], typer.Option("--user", help="Who is doing this.")] = None,
     state_dir: Annotated[Optional[str], typer.Option("--state-dir", hidden=True)] = None,
 ) -> None:
     broker = open_broker(state_dir)
-    user = broker.add_user(
-        user_id,
-        budget_usd=Decimal(usd.lstrip("$")) if usd else None,
-        budget_gpu_hours=Decimal(gpu_hours) if gpu_hours else None,
-        is_admin=admin or None,
-    )
+    try:
+        user = broker.add_user(
+            user_id,
+            actor=whoami(user_opt),
+            budget_usd=Decimal(usd.lstrip("$")) if usd else None,
+            budget_gpu_hours=Decimal(gpu_hours) if gpu_hours else None,
+            is_admin=admin or None,
+        )
+    except BrokerError as exc:
+        die(str(exc))
     console.print(
         f"[green]{user.user_id}[/green]: {fmt(user.budget_usd, Currency.USD)} and "
         f"{fmt(user.budget_gpu_hours, Currency.GPU_HOUR)} per month"
@@ -1298,11 +1304,12 @@ def env_delete(
 def admin_drain(
     hostname: str,
     reason: Annotated[str, typer.Option("--reason", help="Why, so `gpu hosts` can say.")] = "maintenance",
+    user: Annotated[Optional[str], typer.Option("--user", help="Who is doing this.")] = None,
     state_dir: Annotated[Optional[str], typer.Option("--state-dir", hidden=True)] = None,
 ) -> None:
     broker = open_broker(state_dir)
     try:
-        broker.drain_host(hostname, reason, actor=whoami())
+        broker.drain_host(hostname, reason, actor=whoami(user))
     except BrokerError as exc:
         die(str(exc))
     console.print(
@@ -1314,11 +1321,12 @@ def admin_drain(
 @admin_app.command("undrain", help="Let a lab host take jobs again.")
 def admin_undrain(
     hostname: str,
+    user: Annotated[Optional[str], typer.Option("--user", help="Who is doing this.")] = None,
     state_dir: Annotated[Optional[str], typer.Option("--state-dir", hidden=True)] = None,
 ) -> None:
     broker = open_broker(state_dir)
     try:
-        broker.undrain_host(hostname)
+        broker.undrain_host(hostname, actor=whoami(user))
     except BrokerError as exc:
         die(str(exc))
     console.print(f"[green]{hostname}[/green] will be re-checked on the next pass.")
@@ -1334,6 +1342,7 @@ def admin_users(
     table.add_column("dollars left", justify="right")
     table.add_column("gpu-hours left", justify="right")
     table.add_column("admin")
+    table.add_column("suspended")
     for user in broker.users():
         balances = broker.budgets(user.user_id)
         table.add_row(
@@ -1341,8 +1350,52 @@ def admin_users(
             fmt(balances[Currency.USD].available, Currency.USD),
             fmt(balances[Currency.GPU_HOUR].available, Currency.GPU_HOUR),
             "yes" if user.is_admin else "",
+            user.suspended_reason if user.is_suspended else "",
         )
     console.print(table)
+
+
+@admin_app.command("suspend", help="Take a member off the pool. Their queued jobs are held.")
+def admin_suspend(
+    user_id: str,
+    reason: Annotated[str, typer.Option("--reason", help="Shown to them, and in `gpu admin users`.")] = "",
+    user: Annotated[Optional[str], typer.Option("--user", help="Who is doing this.")] = None,
+    state_dir: Annotated[Optional[str], typer.Option("--state-dir", hidden=True)] = None,
+) -> None:
+    broker = open_broker(state_dir)
+    actor = whoami(user)
+    if not _is_admin(broker, actor):
+        die(f"{actor} is not an officer", "ask one to run this")
+    try:
+        suspended = broker.suspend_user(user_id, reason=reason, actor=actor)
+    except BrokerError as exc:
+        die(str(exc))
+    held = broker.store.queued_count(user_id)
+    console.print(
+        f"[yellow]suspended[/yellow] {suspended.user_id}. "
+        f"{held} queued job(s) held; nothing was cancelled. "
+        f"`gpu admin restore {suspended.user_id}` puts them back."
+    )
+
+
+@admin_app.command("restore", help="Put a suspended member back on the pool.")
+def admin_restore(
+    user_id: str,
+    user: Annotated[Optional[str], typer.Option("--user", help="Who is doing this.")] = None,
+    state_dir: Annotated[Optional[str], typer.Option("--state-dir", hidden=True)] = None,
+) -> None:
+    broker = open_broker(state_dir)
+    actor = whoami(user)
+    if not _is_admin(broker, actor):
+        die(f"{actor} is not an officer", "ask one to run this")
+    try:
+        restored = broker.restore_user(user_id, actor=actor)
+    except BrokerError as exc:
+        die(str(exc))
+    console.print(
+        f"[green]restored[/green] {restored.user_id}. "
+        f"{broker.store.queued_count(user_id)} held job(s) go on the next tick."
+    )
 
 
 def _local_gpu(broker: Broker) -> str | None:

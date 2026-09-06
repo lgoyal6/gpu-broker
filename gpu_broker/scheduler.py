@@ -84,6 +84,7 @@ class Scheduler:
             blocked_pool,
             blocked_capacity,
             blocked_tenant,
+            blocked_auth,
         ) = self._dispatch(now)
 
         # After dispatch, so the gauges describe the state this tick left behind
@@ -108,6 +109,7 @@ class Scheduler:
             blocked_on_pool_cap=tuple(blocked_pool),
             blocked_on_capacity=tuple(blocked_capacity),
             blocked_on_tenant=tuple(blocked_tenant),
+            blocked_on_authorization=tuple(blocked_auth),
             stopped_at_ceiling=tuple(ceilinged),
         )
 
@@ -466,8 +468,27 @@ class Scheduler:
         # take the whole pool inside a single tick -- which is what happened
         # when it was measured: 63 of 64 free slots to one person.
         held: dict[str, int] = {}
+        # Authorization is rechecked here, not just at submission. A job can sit
+        # in this queue for hours; the person who submitted it can stop being a
+        # member in that time, and dispatching it then would spend the club's
+        # credits on somebody who is no longer in the club. Read once per tick
+        # because there are usually no suspensions at all.
+        suspended = self.store.suspended_users()
 
         for index, (job, _priority) in enumerate(queue):
+            if job.user_id in suspended:
+                # Held, not failed. Suspension is reversible and often a
+                # mistake; throwing away six hours of queue position would make
+                # undoing it worse than the thing it was correcting.
+                reason = suspended[job.user_id] or "no reason recorded"
+                yield Decision(
+                    job,
+                    "BLOCKED_UNAUTHORIZED",
+                    None,
+                    f"{job.user_id} is suspended from the pool ({reason})",
+                ), None
+                continue
+
             if job.currency in blocked_currencies:
                 yield Decision(job, "BLOCKED_POOL", None, "pool cap already reached"), None
                 continue
@@ -553,14 +574,18 @@ class Scheduler:
 
     def _dispatch(
         self, now: dt.datetime
-    ) -> tuple[list[str], list[str], list[str], list[str]]:
+    ) -> tuple[list[str], list[str], list[str], list[str], list[str]]:
         dispatched: list[str] = []
         blocked_pool: list[str] = []
         blocked_capacity: list[str] = []
         blocked_tenant: list[str] = []
+        blocked_auth: list[str] = []
 
         for decision, backend in self.decisions(now):
             job = decision.job
+            if decision.action == "BLOCKED_UNAUTHORIZED":
+                blocked_auth.append(job.job_id)
+                continue
             if decision.action == "BLOCKED_POOL":
                 blocked_pool.append(job.job_id)
                 continue
@@ -604,6 +629,7 @@ class Scheduler:
             _dedupe(blocked_pool),
             blocked_capacity,
             blocked_tenant,
+            blocked_auth,
         )
 
     def _place(self, job: Job) -> Placement:

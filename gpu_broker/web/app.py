@@ -115,10 +115,21 @@ def create_app(
         finally:
             instance.store.conn.close()
 
-    def viewer(request: Request) -> Identity:
+    def viewer(request: Request, broker: Broker = Depends(broker_for)) -> Identity:
+        """Who is asking, and are they still allowed to.
+
+        A session is a fourteen-day cookie and membership used to be checked
+        once, when it was issued. So this asks again, on every request, from the
+        two places that can answer without GitHub: the allowlist file, and the
+        broker's own suspension flag. FastAPI caches `broker_for` per request,
+        so this shares the connection the endpoint was going to open anyway.
+        """
         identity = request.app.state.sessions.read(request.cookies.get(SESSION_COOKIE))
         if identity is None:
             raise HTTPException(status_code=401, detail="sign in")
+        refusal = _revocation(request.app.state, broker, identity.login)
+        if refusal:
+            raise HTTPException(status_code=403, detail=refusal)
         return identity
 
     def page(request: Request, name: str, status_code: int = 200, **context) -> HTMLResponse:
@@ -305,7 +316,9 @@ def create_app(
 
         if job.state is JobState.QUEUED:
             # No machine involved, so this page can finish the job itself.
-            broker.cancel(job.job_id, actor=me.login)
+            broker.cancel(
+                job.job_id, actor=me.login, admin=membership.is_admin(me.login)
+            )
         else:
             # This process holds no credentials. Record the request; the daemon
             # stops the machine on its next tick.
@@ -370,12 +383,25 @@ def create_app(
         identity = request.app.state.sessions.read(request.cookies.get(SESSION_COOKIE))
         if identity is None:
             raise HTTPException(status_code=401, detail="sign in")
+        opening = await asyncio.to_thread(_stream_revocation, request.app.state, config, identity.login)
+        if opening:
+            raise HTTPException(status_code=403, detail=opening)
 
         async def events():
             after = int(request.query_params.get("after", 0))
             idle_rounds = 0
             while True:
                 if await request.is_disconnected():
+                    return
+                # The only long-lived boundary in the app. Authenticating once
+                # at connect means somebody removed at 2pm keeps reading live
+                # output until they close the tab, so the question is asked
+                # again on every poll rather than once.
+                revoked = await asyncio.to_thread(
+                    _stream_revocation, request.app.state, config, identity.login
+                )
+                if revoked:
+                    yield _sse("revoked", {"reason": revoked})
                     return
                 lines, done = await asyncio.to_thread(_poll_logs, config, job_id, after)
                 for entry_id, at, stream_name, line in lines:
@@ -446,10 +472,13 @@ def create_app(
         if not membership.is_admin(me.login):
             raise HTTPException(status_code=403, detail="that page is for club officers")
         try:
+            # `admin=True`: this page's officers come from the web config's own
+            # list, not from the users table, so it would otherwise lose a power
+            # it has today. Same hatch, and the same reason, as `cancel`.
             if undrain:
-                broker.undrain_host(hostname)
+                broker.undrain_host(hostname, actor=me.login, admin=True)
             else:
-                broker.drain_host(hostname, reason, actor=me.login)
+                broker.drain_host(hostname, reason, actor=me.login, admin=True)
         except BrokerError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return RedirectResponse("/admin", status_code=303)
@@ -504,6 +533,37 @@ def create_app(
 
 
 # --- helpers ----------------------------------------------------------------
+
+
+def _revocation(state: Any, broker: Broker, login: str) -> str:
+    """Why this person may no longer be here, or "" if they still may.
+
+    Two sources, because they answer for two different deployments. The
+    allowlist is the web app's own roster and can be re-read per request. The
+    suspension flag lives in the users table, which is the only one of the two
+    that `gpu run` can see -- so it is the one that stops a queued job.
+    """
+    try:
+        state.membership.recheck(login)
+    except AuthError as exc:
+        return str(exc)
+    user = broker.store.maybe_user(login)
+    if user is not None and user.is_suspended:
+        return (
+            f"{login} is suspended from the pool "
+            f"({user.suspended_reason or 'no reason recorded'}). Ask an officer"
+        )
+    return ""
+
+
+def _stream_revocation(state: Any, config: BrokerConfig, login: str) -> str:
+    """`_revocation` for the stream, which has no request-scoped broker.
+
+    One connection per poll, opened and closed in a worker thread: SQLite
+    connections belong to one thread, and the stream's work already runs in one.
+    """
+    with open_broker(config) as instance:
+        return _revocation(state, instance, login)
 
 
 def _poll_logs(config: BrokerConfig, job_id: str, after: int):

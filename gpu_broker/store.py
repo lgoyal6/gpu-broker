@@ -112,6 +112,13 @@ class Store:
             else existing.budget_gpu_hours,
             is_admin=existing.is_admin if is_admin is None else bool(is_admin),
             created_at=existing.created_at,
+            # Carried, not rewritten. Raising somebody's budget must not quietly
+            # let them back onto the pool, and the UPDATE below does not touch
+            # these columns -- so dropping them here would only make the object
+            # this returns disagree with the row it just wrote.
+            suspended_at=existing.suspended_at,
+            suspended_reason=existing.suspended_reason,
+            suspended_by=existing.suspended_by,
         )
         with transaction(self.conn) as conn:
             conn.execute(
@@ -142,6 +149,56 @@ class Store:
     def list_users(self) -> list[User]:
         rows = self.conn.execute("SELECT * FROM users ORDER BY user_id").fetchall()
         return [_user_from_row(row) for row in rows]
+
+    def has_admins(self) -> bool:
+        """Does the pool have any officer at all?
+
+        Read by the bootstrap in `Broker._require_officer`: while the answer is
+        no there is nobody who could pass an officer check, so the first officer
+        has to be creatable. `LIMIT 1` because the count is never the question.
+        """
+        row = self.conn.execute(
+            "SELECT 1 FROM users WHERE is_admin = 1 LIMIT 1"
+        ).fetchone()
+        return row is not None
+
+    def suspend_user(self, user_id: str, *, reason: str, actor: str) -> User:
+        """Take somebody off the club's capacity without deleting them.
+
+        Deletion is not available: their past jobs reference this row, the
+        ledger has to keep adding up, and somebody removed by mistake should get
+        their queue position back rather than lose it.
+        """
+        self.get_user(user_id)  # raises UnknownUser before any write
+        with transaction(self.conn) as conn:
+            conn.execute(
+                "UPDATE users SET suspended_at = ?, suspended_reason = ?, "
+                "suspended_by = ? WHERE user_id = ?",
+                (to_iso(self.clock.now()), reason, actor, user_id),
+            )
+        return self.get_user(user_id)
+
+    def restore_user(self, user_id: str, *, actor: str) -> User:
+        self.get_user(user_id)
+        with transaction(self.conn) as conn:
+            conn.execute(
+                "UPDATE users SET suspended_at = NULL, suspended_reason = '', "
+                "suspended_by = '' WHERE user_id = ?",
+                (user_id,),
+            )
+        return self.get_user(user_id)
+
+    def suspended_users(self) -> dict[str, str]:
+        """Everybody currently off the pool, and why.
+
+        One query rather than one per queued job: a tick scores every queued job
+        and there are usually no suspensions at all, so the whole answer is
+        smaller than the question asked repeatedly.
+        """
+        rows = self.conn.execute(
+            "SELECT user_id, suspended_reason FROM users WHERE suspended_at IS NOT NULL"
+        ).fetchall()
+        return {row["user_id"]: row["suspended_reason"] for row in rows}
 
     # ------------------------------------------------------------------- jobs
 
@@ -1086,6 +1143,9 @@ def _user_from_row(row: sqlite3.Row) -> User:
         budget_gpu_hours=money(row["budget_gpu_hours"]),
         is_admin=bool(row["is_admin"]),
         created_at=from_iso(row["created_at"]),
+        suspended_at=from_iso(row["suspended_at"]) if row["suspended_at"] else None,
+        suspended_reason=row["suspended_reason"],
+        suspended_by=row["suspended_by"],
     )
 
 
