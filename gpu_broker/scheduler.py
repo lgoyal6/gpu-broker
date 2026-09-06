@@ -79,7 +79,12 @@ class Scheduler:
             elif outcome.final_state in (JobState.FAILED, JobState.CANCELLED):
                 failed.append(job.job_id)
 
-        dispatched, blocked_pool, blocked_capacity = self._dispatch(now)
+        (
+            dispatched,
+            blocked_pool,
+            blocked_capacity,
+            blocked_tenant,
+        ) = self._dispatch(now)
 
         # After dispatch, so the gauges describe the state this tick left behind
         # rather than the one it found. Failures here must not take down a tick:
@@ -102,6 +107,7 @@ class Scheduler:
             settled=tuple(settled),
             blocked_on_pool_cap=tuple(blocked_pool),
             blocked_on_capacity=tuple(blocked_capacity),
+            blocked_on_tenant=tuple(blocked_tenant),
             stopped_at_ceiling=tuple(ceilinged),
         )
 
@@ -455,10 +461,32 @@ class Scheduler:
 
         queue = self.ordered_queue(now)
         blocked_currencies: set[Currency] = set()
+        # How many machines each member is already holding. Counted once, then
+        # kept up to date as this pass commits dispatches, so a member cannot
+        # take the whole pool inside a single tick -- which is what happened
+        # when it was measured: 63 of 64 free slots to one person.
+        held: dict[str, int] = {}
 
         for index, (job, _priority) in enumerate(queue):
             if job.currency in blocked_currencies:
                 yield Decision(job, "BLOCKED_POOL", None, "pool cap already reached"), None
+                continue
+
+            if job.user_id not in held:
+                held[job.user_id] = self.store.running_count(job.user_id)
+            if held[job.user_id] >= self.config.max_running_jobs_per_user:
+                # Blocked, not refused: the job keeps its place in the queue and
+                # goes as soon as one of this member's jobs finishes. Skipping
+                # to the next job is right here in a way it is not for the pool
+                # cap -- this job is not waiting on capacity the pool lacks, it
+                # is waiting on its own owner.
+                yield Decision(
+                    job,
+                    "BLOCKED_TENANT",
+                    None,
+                    f"{job.user_id} is holding {held[job.user_id]} jobs, the limit "
+                    f"is {self.config.max_running_jobs_per_user}",
+                ), None
                 continue
 
             remaining = headroom[job.currency] - committed[job.currency]
@@ -489,6 +517,7 @@ class Scheduler:
                 continue
 
             committed[job.currency] += job.reserved
+            held[job.user_id] += 1
             yield Decision(
                 job, "DISPATCH", placement.backend.name, placement.one_line()
             ), placement.backend
@@ -524,15 +553,19 @@ class Scheduler:
 
     def _dispatch(
         self, now: dt.datetime
-    ) -> tuple[list[str], list[str], list[str]]:
+    ) -> tuple[list[str], list[str], list[str], list[str]]:
         dispatched: list[str] = []
         blocked_pool: list[str] = []
         blocked_capacity: list[str] = []
+        blocked_tenant: list[str] = []
 
         for decision, backend in self.decisions(now):
             job = decision.job
             if decision.action == "BLOCKED_POOL":
                 blocked_pool.append(job.job_id)
+                continue
+            if decision.action == "BLOCKED_TENANT":
+                blocked_tenant.append(job.job_id)
                 continue
             if decision.action == "BLOCKED_CAPACITY" or backend is None:
                 blocked_capacity.append(job.job_id)
@@ -566,7 +599,12 @@ class Scheduler:
             self.store.append_log(job.job_id, "broker", f"placement: {decision.detail}")
             dispatched.append(job.job_id)
 
-        return dispatched, _dedupe(blocked_pool), blocked_capacity
+        return (
+            dispatched,
+            _dedupe(blocked_pool),
+            blocked_capacity,
+            blocked_tenant,
+        )
 
     def _place(self, job: Job) -> Placement:
         return choose(job, self.backends, self.config)

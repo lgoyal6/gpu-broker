@@ -453,6 +453,27 @@ class Store:
     def active_jobs(self) -> list[Job]:
         return self.list_jobs(states=ACTIVE)
 
+    def queued_count(self, user_id: str) -> int:
+        """How many jobs this member has waiting. Counted, not listed: the
+        limit that uses it is checked on every submission."""
+        return self._count_in_states(user_id, [JobState.QUEUED])
+
+    def running_count(self, user_id: str) -> int:
+        """How many machines this member is holding right now.
+
+        ACTIVE rather than RUNNING: a job that is still booting has already
+        taken the capacity and is already being billed for it.
+        """
+        return self._count_in_states(user_id, list(ACTIVE))
+
+    def _count_in_states(self, user_id: str, states: list[JobState]) -> int:
+        row = self.conn.execute(
+            f"SELECT COUNT(*) AS n FROM jobs WHERE user_id = ? "
+            f"AND state IN ({','.join('?' * len(states))})",
+            [user_id, *(str(state) for state in states)],
+        ).fetchone()
+        return row["n"]
+
     def history(self, job_id: str) -> list[tuple[str | None, str, dt.datetime, str | None]]:
         rows = self.conn.execute(
             "SELECT from_state, to_state, at, reason FROM job_transitions "
@@ -894,11 +915,55 @@ class Store:
 
     # ------------------------------------------------------------------- logs
 
+    TRUNCATION_NOTICE = (
+        "[broker] output truncated: this job hit the {limit:,} line limit. "
+        "Write anything longer to a file under /data."
+    )
+
+    def _within_log_budget(
+        self, job_id: str, lines: Sequence[tuple[str, str]]
+    ) -> list[tuple[str, str]]:
+        """As much of `lines` as this job is still allowed to store.
+
+        Two bounds, both from `config`: how long one line may be, and how many
+        lines one job may keep. Without them a job that prints is never told to
+        stop -- 20,000 lines of 200 bytes grew the database by 10.7 MB, and one
+        5 MB line was stored whole.
+
+        The last line a job is allowed to store is the notice saying why there
+        is no more, so somebody reading the page does not conclude their job
+        stopped printing.
+        """
+        cap = self.config.max_log_lines_per_job
+        stored = self.conn.execute(
+            "SELECT COUNT(*) AS n FROM job_logs WHERE job_id = ?", (job_id,)
+        ).fetchone()["n"]
+        if stored >= cap:
+            return []
+
+        width = self.config.max_log_line_bytes
+        clipped = [
+            (stream, line if len(line) <= width else line[: width - 3] + "...")
+            for stream, line in lines
+        ]
+        room = cap - stored
+        if len(clipped) < room:
+            return clipped
+        return clipped[: room - 1] + [
+            ("broker", self.TRUNCATION_NOTICE.format(limit=cap))
+        ]
+
     def append_log(self, job_id: str, stream: str, line: str) -> None:
+        keep = self._within_log_budget(job_id, [(stream, line)])
+        if not keep:
+            return
         with transaction(self.conn) as conn:
-            conn.execute(
+            conn.executemany(
                 "INSERT INTO job_logs (job_id, at, stream, line) VALUES (?, ?, ?, ?)",
-                (job_id, to_iso(self.clock.now()), stream, line),
+                [
+                    (job_id, to_iso(self.clock.now()), kept_stream, kept_line)
+                    for kept_stream, kept_line in keep
+                ],
             )
 
     def append_backend_logs(self, job: Job, lines: Sequence[tuple[str, str]]) -> int:
@@ -911,11 +976,14 @@ class Store:
         if not lines:
             return job.logs_fetched
         at = to_iso(self.clock.now())
+        # The cursor counts what was polled, not what was stored. Advancing it
+        # by the kept lines alone would re-read the dropped ones every tick.
         cursor = job.logs_fetched + len(lines)
+        keep = self._within_log_budget(job.job_id, list(lines))
         with transaction(self.conn) as conn:
             conn.executemany(
                 "INSERT INTO job_logs (job_id, at, stream, line) VALUES (?, ?, ?, ?)",
-                [(job.job_id, at, stream, line) for stream, line in lines],
+                [(job.job_id, at, stream, line) for stream, line in keep],
             )
             conn.execute(
                 "UPDATE jobs SET logs_fetched = ?, updated_at = ? WHERE job_id = ?",
