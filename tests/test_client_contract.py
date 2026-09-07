@@ -27,11 +27,14 @@ a contract checker that cannot fail is not evidence of anything.
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
+from clients.status_v1 import read_dashboard_v1
 from gpu_broker.backends import FakeBackend
 from gpu_broker.broker import Broker
 from gpu_broker.clock import ManualClock
@@ -182,6 +185,24 @@ def test_an_old_client_reading_the_new_payload_gets_numbers_not_none(published):
     assert published["week"]["completed"] >= 1
 
 
+def test_the_generated_v1_client_reads_todays_payload(published):
+    """This imports and executes the retained client generated from the old
+    wire fixture, rather than only comparing two untyped dictionaries."""
+    queued, running, spent, completed = read_dashboard_v1(published)
+    assert queued >= 0
+    assert running >= 0
+    assert spent >= 0
+    assert completed >= 1
+
+
+def test_the_generated_v1_schema_and_client_are_reproducible():
+    subprocess.run(
+        [sys.executable, "scripts/generate_status_v1.py", "--check"],
+        check=True,
+        cwd=Path(__file__).parent.parent,
+    )
+
+
 def test_a_new_field_is_not_a_breaking_change(published):
     """Additive, stated as a rule rather than assumed: adding a key to the
     payload must not make the checker complain."""
@@ -229,3 +250,10 @@ def test_the_checker_is_not_vacuous():
     assert incompatibilities({"a": 1}, {}) == ["a: gone (was int)"]
     assert incompatibilities({"a": 1}, {"a": "1"}) == ["a: was int, is now str"]
     assert incompatibilities({"a": None}, {"a": 1.0}) == []
+
+
+def test_the_old_client_itself_fails_if_a_consumed_field_disappears(published):
+    broken = dict(published)
+    broken.pop("queue_depth")
+    with pytest.raises(KeyError, match="queue_depth"):
+        read_dashboard_v1(broken)
