@@ -249,13 +249,29 @@ Each phase has an acceptance test that runs in CI with no AWS credentials.
 
 ## Testing
 
+The Quickstart installs `.[web]`, which is what the broker needs to *run*. The
+test tooling is a separate extra, so install it before the commands below or the
+first one fails with `ModuleNotFoundError: No module named 'pytest'`:
+
 ```bash
-pytest -m "not aws"    # the fast loop, ~80s
-pytest                 # everything, ~4min
+pip install -e '.[dev]'   # adds pytest, moto, torch and ruff
+pytest -m "not aws"       # the fast loop, ~80s
+pytest                    # everything, ~4min
 ruff check --select F,E9 gpu_broker tests
 ```
 
+`[dev]` pulls in `[web]` and `[otel]` as well, so it is the only install a
+contributor needs; the OpenTelemetry tests are part of the 808 and need `[otel]`
+to be present. If you only want tracing at runtime and not the test tooling,
+`pip install -e '.[otel]'` is the smaller install - see
+[docs/OPERATIONS.md](docs/OPERATIONS.md).
+
 808 tests. Nothing needs the network, an AWS account, or a GPU.
+
+Both commands above print their counts. Do not add your own `-q`: `addopts` in
+`pyproject.toml` already carries one, and a second one suppresses the summary
+line entirely, so the run looks like it counted nothing. `pytest -o addopts=""`
+is the way back to a verbose run.
 
 The doubles are chosen so tests fail for real reasons: **moto** answers the
 actual AWS APIs (and honours `DryRun`), **asyncssh** runs a real SSH server with
