@@ -139,6 +139,35 @@ in the cloud is provisioned. They are recorded exactly like a club job, tagged
 While the pool has one user the page says so, because a queue of one is not
 evidence of a queue.
 
+### Scheduler trace and replay
+
+The production scheduler is `gpu_broker.fairshare.order_queue`: fair share plus
+bounded age, a strict queue head under the pool budget, and capacity skips only
+when another GPU type can run. Export its observed job history without commands,
+names, backend handles, logs, or wall-clock timestamps:
+
+```bash
+gpu trace export schedule-trace.json
+gpu trace replay schedule-trace.json
+```
+
+The exporter refuses operational histories smaller than 20 jobs or five users.
+Aliases do not anonymize a one-person queue. For a credential-free walkthrough,
+seed the isolated demo database and export that instead:
+
+```bash
+gpu demo seed --dir /tmp/gpu-broker-trace-demo --days 30 --overwrite
+gpu trace export --state-dir /tmp/gpu-broker-trace-demo /tmp/schedule-trace.json
+gpu trace replay /tmp/schedule-trace.json
+```
+
+Replay validates the trace digest and reconstructs its submit, start, and finish
+timeline. It reports p95 wait, completed GPU-hours, spend, concurrency, and Jain
+fairness. The current product does not collect deadlines or capacity snapshots,
+so this is an adoptable trace foundation, not an optimizer comparison. Deadline
+misses, starvation under alternative policies, solver overhead, and timeout
+fallback remain blocked until enough real history with those fields exists.
+
 ## Architecture
 
 ```mermaid
