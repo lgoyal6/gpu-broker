@@ -1,0 +1,299 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gpu-broker.example/contracts/status-v1.schema.json",
+  "title": "GPU Broker public status v1",
+  "$comment": "Captured from commit f717dde. Additive fields are allowed.",
+  "type": "object",
+  "properties": {
+    "backends": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "hours": {
+            "type": "number"
+          },
+          "jobs": {
+            "type": "integer"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "share": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "hours",
+          "jobs",
+          "kind",
+          "name",
+          "share"
+        ],
+        "additionalProperties": true
+      }
+    },
+    "burn_per_day": {
+      "type": "string"
+    },
+    "demo": {
+      "type": "boolean"
+    },
+    "dollars_reclaimed": {
+      "type": "string"
+    },
+    "dollars_spent": {
+      "type": "string"
+    },
+    "generated_at": {
+      "type": "string"
+    },
+    "gpu_hours_used": {
+      "type": "string"
+    },
+    "jobs_all_time": {
+      "type": "integer"
+    },
+    "members_all_time": {
+      "type": "integer"
+    },
+    "members_this_week": {
+      "type": "integer"
+    },
+    "month": {
+      "type": "object",
+      "properties": {
+        "completed": {
+          "type": "integer"
+        },
+        "failed": {
+          "type": "integer"
+        },
+        "interrupted": {
+          "type": "integer"
+        },
+        "preempted": {
+          "type": "integer"
+        },
+        "reclaimed": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "completed",
+        "failed",
+        "interrupted",
+        "preempted",
+        "reclaimed"
+      ],
+      "additionalProperties": true
+    },
+    "pilot": {
+      "type": "boolean"
+    },
+    "pool_remaining": {
+      "type": "string"
+    },
+    "queue_7d": {
+      "type": "array",
+      "items": {
+        "anyOf": [
+          {
+            "type": "null"
+          },
+          {
+            "type": "number"
+          }
+        ]
+      }
+    },
+    "queue_depth": {
+      "type": "integer"
+    },
+    "recent": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "gpu_type": {
+            "type": "string"
+          },
+          "hours": {
+            "type": "number"
+          },
+          "member": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "utilization": {
+            "type": "number"
+          },
+          "where": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "gpu_type",
+          "hours",
+          "member",
+          "state",
+          "utilization",
+          "where"
+        ],
+        "additionalProperties": true
+      }
+    },
+    "repeat_members": {
+      "type": "integer"
+    },
+    "running": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "gpu_type": {
+            "type": "string"
+          },
+          "hours": {
+            "type": "number"
+          },
+          "member": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "utilization": {
+            "type": "number"
+          },
+          "where": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "gpu_type",
+          "hours",
+          "member",
+          "state",
+          "utilization",
+          "where"
+        ],
+        "additionalProperties": true
+      }
+    },
+    "running_now": {
+      "type": "integer"
+    },
+    "runway_confident": {
+      "type": "boolean"
+    },
+    "runway_days": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "utilization_30d": {
+      "type": "array",
+      "items": {
+        "anyOf": [
+          {
+            "type": "null"
+          },
+          {
+            "type": "number"
+          }
+        ]
+      }
+    },
+    "utilization_7d": {
+      "type": "array",
+      "items": {
+        "anyOf": [
+          {
+            "type": "null"
+          },
+          {
+            "type": "number"
+          }
+        ]
+      }
+    },
+    "utilization_mean_30d": {
+      "type": "number"
+    },
+    "utilization_mean_7d": {
+      "type": "number"
+    },
+    "utilization_peak_7d": {
+      "type": "number"
+    },
+    "week": {
+      "type": "object",
+      "properties": {
+        "completed": {
+          "type": "integer"
+        },
+        "failed": {
+          "type": "integer"
+        },
+        "interrupted": {
+          "type": "integer"
+        },
+        "preempted": {
+          "type": "integer"
+        },
+        "reclaimed": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "completed",
+        "failed",
+        "interrupted",
+        "preempted",
+        "reclaimed"
+      ],
+      "additionalProperties": true
+    }
+  },
+  "required": [
+    "backends",
+    "burn_per_day",
+    "demo",
+    "dollars_reclaimed",
+    "dollars_spent",
+    "generated_at",
+    "gpu_hours_used",
+    "jobs_all_time",
+    "members_all_time",
+    "members_this_week",
+    "month",
+    "pilot",
+    "pool_remaining",
+    "queue_7d",
+    "queue_depth",
+    "recent",
+    "repeat_members",
+    "running",
+    "running_now",
+    "runway_confident",
+    "runway_days",
+    "utilization_30d",
+    "utilization_7d",
+    "utilization_mean_30d",
+    "utilization_mean_7d",
+    "utilization_peak_7d",
+    "week"
+  ],
+  "additionalProperties": true
+}
