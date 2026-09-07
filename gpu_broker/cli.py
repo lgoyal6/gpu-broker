@@ -12,6 +12,7 @@ machine is who you are to the broker. Phase 5 replaces it with GitHub OAuth.
 
 from __future__ import annotations
 
+import json
 import os
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -44,6 +45,8 @@ env_app = typer.Typer(no_args_is_help=True, help="Named environments jobs can ru
 app.add_typer(env_app, name="env")
 demo_app = typer.Typer(no_args_is_help=True, help="Seeded demo data, in its own database.")
 app.add_typer(demo_app, name="demo")
+trace_app = typer.Typer(no_args_is_help=True, help="Privacy-bounded scheduling traces.")
+app.add_typer(trace_app, name="trace")
 
 STATE_DIR_ENV = "GPU_BROKER_HOME"
 USER_ENV = "GPU_BROKER_USER"
@@ -1464,6 +1467,48 @@ def demo_path(
     state_dir: Annotated[Optional[str], typer.Option("--state-dir", hidden=True)] = None,
 ) -> None:
     console.print(str(_default_state_dir(state_dir) / "demo"))
+
+
+@trace_app.command("export", help="Export anonymized scheduling history for offline replay.")
+def trace_export(
+    output: Annotated[Path, typer.Argument(help="Destination JSON trace.")],
+    state_dir: Annotated[Optional[str], typer.Option("--state-dir", hidden=True)] = None,
+) -> None:
+    from .schedule_trace import TraceError, export_trace
+
+    broker = open_broker(state_dir)
+    try:
+        bundle = export_trace(broker.store, output)
+    except TraceError as exc:
+        die(str(exc))
+    console.print(
+        f"[green]exported[/green] {len(bundle['jobs'])} anonymized job(s) to {output}"
+    )
+    console.print(f"[dim]sha256 {bundle['content_sha256']}[/dim]")
+
+
+@trace_app.command("replay", help="Replay and validate an exported scheduling timeline.")
+def trace_replay(
+    trace: Annotated[Path, typer.Argument(help="Trace JSON produced by gpu trace export.")],
+) -> None:
+    from .schedule_trace import TraceError, replay_trace
+
+    try:
+        summary = replay_trace(trace)
+    except (OSError, json.JSONDecodeError, TraceError) as exc:
+        die(str(exc))
+    console.print(
+        f"[green]replayed[/green] {summary.jobs} job(s), {summary.users} user(s), "
+        f"{summary.completed} completed, max {summary.max_active} active"
+    )
+    wait = "unavailable" if summary.p95_wait_seconds is None else f"{summary.p95_wait_seconds:.1f}s"
+    fairness = "unavailable" if summary.jain_fairness is None else f"{summary.jain_fairness:.3f}"
+    console.print(
+        f"p95 wait {wait}; useful GPU-hours {summary.useful_gpu_hours:.3f}; "
+        f"Jain fairness {fairness}; spend {summary.spend}"
+    )
+    console.print("[yellow]deadline and optimizer metrics remain unavailable[/yellow]")
+    console.print(f"[dim]sha256 {summary.digest}[/dim]")
 
 
 def main() -> None:
