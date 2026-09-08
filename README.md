@@ -177,6 +177,28 @@ so this is an adoptable trace foundation, not an optimizer comparison. Deadline
 misses, starvation under alternative policies, solver overhead, and timeout
 fallback remain blocked until enough real history with those fields exists.
 
+Real scheduler ticks also append privacy-bounded decision observations: action,
+resource class, requested GPU memory, backend tier, and reasoning. Job state,
+transition, checkpoint, interruption, and settled-cost records remain in their
+existing durable tables. Produce the cost study as aggregate-only JSON with a
+private operator salt supplied through the environment:
+
+```bash
+GPU_BROKER_TRACE_SALT="$(security find-generic-password -w -s gpu-broker-trace-salt)" \
+  gpu trace cost-export cost-study.json
+gpu trace prune --days 90
+```
+
+No command, timestamp, handle, job row, or pseudonymous identifier is written to
+the aggregate file. The salt must contain at least 16 bytes and is never stored
+by the broker. The export refuses fewer than 20 organic jobs or five anonymous
+users. It compares observed fair-share-plus-age queue time with a deterministic
+FIFO replay over the exact same jobs and observed durations. That replay changes
+ordering only: capacity, outcomes, prices, and durations are held constant.
+Retry cost is an estimate allocated across extra attempts, not a provider invoice.
+Pruning deletes only disposable scheduler observations. Jobs, transitions, and
+the accounting ledger remain intact.
+
 ## Architecture
 
 ```mermaid
