@@ -200,6 +200,43 @@ class Store:
         ).fetchall()
         return {row["user_id"]: row["suspended_reason"] for row in rows}
 
+    def record_schedule_observation(
+        self,
+        *,
+        job_id: str,
+        decision: str,
+        resource_class: str,
+        requested_memory_mb: int,
+        backend: str | None,
+        tier: str | None,
+        detail: str,
+    ) -> None:
+        """Record one real scheduler decision without copying user identity."""
+        with transaction(self.conn) as conn:
+            conn.execute(
+                "INSERT INTO schedule_observations "
+                "(job_id, at, decision, resource_class, requested_memory_mb, "
+                "backend, tier, detail) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    job_id,
+                    to_iso(self.clock.now()),
+                    decision,
+                    resource_class,
+                    max(0, int(requested_memory_mb)),
+                    backend,
+                    tier,
+                    detail,
+                ),
+            )
+
+    def delete_schedule_observations_before(self, cutoff: dt.datetime) -> int:
+        """Apply retention to disposable observations, never accounting rows."""
+        with transaction(self.conn) as conn:
+            result = conn.execute(
+                "DELETE FROM schedule_observations WHERE at < ?", (to_iso(cutoff),)
+            )
+        return result.rowcount
+
     # ------------------------------------------------------------------- jobs
 
     def create_job(

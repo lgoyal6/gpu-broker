@@ -601,6 +601,17 @@ class Scheduler:
 
         for decision, backend in self.decisions(now):
             job = decision.job
+            gpu = self.config.gpu(job.gpu_type)
+            tier = getattr(backend, "tier", "ondemand") if backend else None
+            self.store.record_schedule_observation(
+                job_id=job.job_id,
+                decision=decision.action,
+                resource_class=job.gpu_type,
+                requested_memory_mb=gpu.memory_mb,
+                backend=backend.name if backend else None,
+                tier=tier,
+                detail=decision.detail,
+            )
             # The consumer half of the queue hop. Parented on the context the
             # submitting process parked on this row, so a dispatch that happens
             # in another process minutes later is still the same trace as the

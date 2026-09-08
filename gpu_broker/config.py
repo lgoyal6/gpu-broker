@@ -39,17 +39,18 @@ class GpuType:
     hourly_price: Decimal
     """Dollars per hour, or 1.0 for GPU_HOUR types (an hour costs an hour)."""
     description: str = ""
+    memory_mb: int = 0
 
 
 # Placeholder on-demand prices, us-west-2, captured by hand on 2026-08-24.
 # Phase 3 replaces this table with a refresh from the AWS pricing API. Do not
 # use these for accounting until it does.
 DEFAULT_GPU_TYPES: tuple[GpuType, ...] = (
-    GpuType("t4", Currency.USD, money("0.526"), "g4dn.xlarge, 16GB"),
-    GpuType("a10g", Currency.USD, money("1.006"), "g5.xlarge, 24GB"),
-    GpuType("l4", Currency.USD, money("0.8048"), "g6.xlarge, 24GB"),
-    GpuType("a100", Currency.USD, money("4.10"), "p4d slice, 40GB"),
-    GpuType("a6000", Currency.GPU_HOUR, money("1.0"), "lab machine, 48GB, free"),
+    GpuType("t4", Currency.USD, money("0.526"), "g4dn.xlarge, 16GB", 16_384),
+    GpuType("a10g", Currency.USD, money("1.006"), "g5.xlarge, 24GB", 24_576),
+    GpuType("l4", Currency.USD, money("0.8048"), "g6.xlarge, 24GB", 24_576),
+    GpuType("a100", Currency.USD, money("4.10"), "p4d slice, 40GB", 40_960),
+    GpuType("a6000", Currency.GPU_HOUR, money("1.0"), "lab machine, 48GB, free", 49_152),
 )
 
 
