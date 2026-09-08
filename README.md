@@ -10,9 +10,10 @@ jobs run, credits reclaimed and queue depth, with no sign-in and no usernames.
 
 [![The public status page: pool utilization over 7 and 30 days, jobs run this week by outcome, credit spent and reclaimed, and recent activity with members shown as anonymous labels](docs/status-page.png)](docs/status-page.png)
 
-*That page and the screenshot above are currently a snapshot of seeded demo
-data, and say so on the page. Both are replaced by real numbers as soon as the
-pilot runs - see [Demo data and the pilot](#demo-data-and-the-pilot).*
+*That page and the screenshot above are currently a snapshot generated from six
+fictional demo personas, and say so on the page. They do not represent the 20
+club members who have used the broker - see
+[Demo data and the pilot](#demo-data-and-the-pilot).*
 
 ![Fair share putting the heaviest user last, and a job caught holding a GPU six hours after its training script died - with the samples that justify it](docs/demo.gif)
 
@@ -125,8 +126,16 @@ reports which lifecycle states it actually reached, and a test asserts the list.
 Any page built from it is labelled seeded demo data, and that label cannot be
 turned off.
 
-**Pilot mode** puts real work on the lab GPU through the broker before twenty
-people are on it:
+The seed contains six fictional personas whose jobs exercise the multi-user
+scheduler, interruption, failure, cancellation, budget-refusal, and idle-reclaim
+paths. Those six personas are not adoption evidence. Separately, the broker has
+been used by 20 members of the AWS Student Builder Club, and 8 returned for a
+second job. Those are user-confirmed adoption counts; they are not calculated
+from the seeded database or the public status page.
+
+**Pilot mode** puts real work on the lab GPU through the broker before a new
+installation opens to its full membership. It is a staged deployment path, not
+the source of the adoption counts above:
 
 ```bash
 gpu submit --pilot --hours 6 -- python train.py
