@@ -1511,6 +1511,49 @@ def trace_replay(
     console.print(f"[dim]sha256 {summary.digest}[/dim]")
 
 
+@trace_app.command("cost-export", help="Export aggregate operational cost evidence.")
+def trace_cost_export(
+    output: Annotated[Path, typer.Argument(help="Destination aggregate JSON report.")],
+    salt_env: Annotated[
+        str, typer.Option("--salt-env", help="Environment variable containing the private salt.")
+    ] = "GPU_BROKER_TRACE_SALT",
+    state_dir: Annotated[Optional[str], typer.Option("--state-dir", hidden=True)] = None,
+) -> None:
+    import os
+
+    from .schedule_trace import TraceError, export_cost_report
+
+    salt = os.environ.get(salt_env, "")
+    if not salt:
+        die(f"{salt_env} is not set; the salt is required and must not be committed")
+    broker = open_broker(state_dir)
+    try:
+        report = export_cost_report(
+            broker.store, broker.config, output, salt=salt
+        )
+    except TraceError as exc:
+        die(str(exc))
+    boundary = report["evidence_boundary"]
+    console.print(
+        f"[green]exported[/green] aggregate study for {boundary['jobs']} job(s), "
+        f"{boundary['anonymous_users']} anonymous user(s) to {output}"
+    )
+    console.print(f"[dim]sha256 {report['content_sha256']}[/dim]")
+
+
+@trace_app.command("prune", help="Delete expired disposable scheduler observations.")
+def trace_prune(
+    days: Annotated[int, typer.Option("--days", min=1)] = 90,
+    state_dir: Annotated[Optional[str], typer.Option("--state-dir", hidden=True)] = None,
+) -> None:
+    import datetime as dt
+
+    broker = open_broker(state_dir)
+    cutoff = broker.clock.now() - dt.timedelta(days=days)
+    deleted = broker.store.delete_schedule_observations_before(cutoff)
+    console.print(f"[green]deleted[/green] {deleted} observation(s) older than {days} days")
+
+
 def main() -> None:
     try:
         app()
