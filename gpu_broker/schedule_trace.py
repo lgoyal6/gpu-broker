@@ -70,8 +70,10 @@ def build_cost_report(
     user_keys = {anonymous_user_id(job.user_id, salt) for job in jobs}
     if len(jobs) < MIN_OPERATIONAL_JOBS or len(user_keys) < MIN_OPERATIONAL_USERS:
         raise TraceError(
-            f"operational history has {len(jobs)} job(s) and {len(user_keys)} user(s); "
-            f"need at least {MIN_OPERATIONAL_JOBS} jobs and {MIN_OPERATIONAL_USERS} users"
+            f"insufficient data: the operational trace holds {len(jobs)} job(s) "
+            f"from {len(user_keys)} user(s); a cost comparison needs at least "
+            f"{MIN_OPERATIONAL_JOBS} jobs from {MIN_OPERATIONAL_USERS} users, "
+            "so no cost-comparison verdict is emitted"
         )
 
     completed = [job for job in jobs if job.state is JobState.COMPLETED]
@@ -99,20 +101,24 @@ def build_cost_report(
 
     # Replay the exact observed jobs through one FIFO slot per resource class.
     # Durations and completion outcomes are held fixed. This isolates ordering;
-    # it is not a counterfactual cloud-capacity or price model.
+    # it is not a counterfactual cloud-capacity or price model. Only jobs that
+    # really started are replayed: a refused or cancelled-while-queued job never
+    # held capacity, and giving it a zero-wait sample under FIFO would compare
+    # the two policies over different job sets.
     available: dict[str, float] = defaultdict(float)
-    epoch = min(job.submitted_at for job in jobs)
     fifo_waits: list[float] = []
-    for job in sorted(jobs, key=lambda item: (item.submitted_at, item.job_id)):
-        submitted = (job.submitted_at - epoch).total_seconds()
-        start = max(submitted, available[job.gpu_type])
-        fifo_waits.append(start - submitted)
-        duration = (
-            max(0.0, (job.finished_at - job.started_at).total_seconds())
-            if job.started_at is not None and job.finished_at is not None
-            else 0.0
-        )
-        available[job.gpu_type] = start + duration
+    if started:
+        epoch = min(job.submitted_at for job in started)
+        for job in sorted(started, key=lambda item: (item.submitted_at, item.job_id)):
+            submitted = (job.submitted_at - epoch).total_seconds()
+            start = max(submitted, available[job.gpu_type])
+            fifo_waits.append(start - submitted)
+            duration = (
+                max(0.0, (job.finished_at - job.started_at).total_seconds())
+                if job.finished_at is not None
+                else 0.0
+            )
+            available[job.gpu_type] = start + duration
 
     observations = store.conn.execute(
         "SELECT COUNT(*) AS n FROM schedule_observations"
@@ -164,7 +170,7 @@ def build_cost_report(
         },
         "fifo_replay": {
             "name": "FIFO, one observed-duration slot per resource class",
-            "same_trace_jobs": len(jobs),
+            "same_trace_jobs": len(started),
             "completion_rate_held_constant": len(completed) / len(jobs),
             "queue_p50_seconds": _percentile(fifo_waits, 0.50),
             "queue_p95_seconds": _percentile(fifo_waits, 0.95),
