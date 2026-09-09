@@ -126,11 +126,20 @@ def test_cost_report_is_aggregate_only_and_replays_same_trace(broker, clock):
 
 
 def test_cost_report_refuses_the_real_one_user_trace(broker):
+    """The gate that keeps a one-person trace from becoming a C18 claim.
+
+    The statement must carry the real counts and must say that no verdict is
+    emitted, because that refusal is itself the honest measured result until
+    20 jobs from 5 users exist.
+    """
     broker.add_user("one-real-user")
     broker.submit(
         user_id="one-real-user", command="private command", gpu_type="a10g", hours=0.1
     )
-    with pytest.raises(TraceError, match="need at least 20 jobs and 5 users"):
+    with pytest.raises(
+        TraceError,
+        match=r"1 job\(s\) from 1 user\(s\).*no cost-comparison verdict",
+    ):
         build_cost_report(broker.store, broker.config, salt="local-private-salt")
 
 
