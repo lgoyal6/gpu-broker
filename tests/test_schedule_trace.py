@@ -172,3 +172,51 @@ def test_real_tick_records_decision_resource_class_and_memory(broker):
     assert row["resource_class"] == "a10g"
     assert row["requested_memory_mb"] == 24_576
     assert row["backend"] == "cloud"
+
+
+def test_a_blocked_decision_is_recorded_once_until_it_changes(broker, clock):
+    """A job blocked on capacity must not grow one identical row per tick.
+
+    Ticks arrive every few seconds for as long as the daemon runs, so a table
+    that gains a row per tick per waiting job grows with wall-clock time rather
+    than with scheduling decisions. Dispatches are exempt: a resume after a
+    preemption is a new decision even when nothing about it looks different.
+    """
+    broker.add_user("fixture-a@example.test")
+    broker.add_user("fixture-b@example.test")
+    # Fill both a10g slots, then a third job waits on capacity. The clock moves
+    # between submissions so the queue order is the submission order rather
+    # than a job-id coin toss.
+    for _ in range(2):
+        broker.submit(
+            user_id="fixture-a@example.test",
+            command="python fill.py",
+            gpu_type="a10g",
+            hours=1.0,
+        )
+        clock.advance(seconds=1)
+    waiting = broker.submit(
+        user_id="fixture-b@example.test",
+        command="python wait.py",
+        gpu_type="a10g",
+        hours=0.1,
+    ).job
+    for _ in range(4):
+        broker.tick()
+        clock.advance(seconds=30)
+    rows = broker.store.conn.execute(
+        "SELECT decision FROM schedule_observations WHERE job_id = ? ORDER BY id",
+        (waiting.job_id,),
+    ).fetchall()
+    assert [row["decision"] for row in rows] == ["BLOCKED_CAPACITY"]
+
+    # Let the slot-holders finish; the waiting job's dispatch is a new decision
+    # and is appended.
+    for _ in range(80):
+        broker.tick()
+        clock.advance(minutes=5)
+    rows = broker.store.conn.execute(
+        "SELECT decision FROM schedule_observations WHERE job_id = ? ORDER BY id",
+        (waiting.job_id,),
+    ).fetchall()
+    assert [row["decision"] for row in rows] == ["BLOCKED_CAPACITY", "DISPATCH"]

@@ -211,7 +211,28 @@ class Store:
         tier: str | None,
         detail: str,
     ) -> None:
-        """Record one real scheduler decision without copying user identity."""
+        """Record one real scheduler decision without copying user identity.
+
+        A repeated blocked decision is not repeated in the table. A job blocked
+        on the pool cap would otherwise gain one identical row per tick for as
+        long as it waits, a table that grows with time rather than with anything
+        the scheduler decided. Every DISPATCH is kept: a resume after preemption
+        is a new decision even when it lands on the same backend.
+        """
+        if decision != "DISPATCH":
+            latest = self.conn.execute(
+                "SELECT decision, backend, tier, detail FROM schedule_observations "
+                "WHERE job_id = ? ORDER BY id DESC LIMIT 1",
+                (job_id,),
+            ).fetchone()
+            if (
+                latest is not None
+                and latest["decision"] == decision
+                and latest["backend"] == backend
+                and latest["tier"] == tier
+                and latest["detail"] == detail
+            ):
+                return
         with transaction(self.conn) as conn:
             conn.execute(
                 "INSERT INTO schedule_observations "
