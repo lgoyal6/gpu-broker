@@ -196,8 +196,10 @@ users. It compares observed fair-share-plus-age queue time with a deterministic
 FIFO replay over the exact same jobs and observed durations. That replay changes
 ordering only: capacity, outcomes, prices, and durations are held constant.
 Retry cost is an estimate allocated across extra attempts, not a provider invoice.
-Pruning deletes only disposable scheduler observations. Jobs, transitions, and
-the accounting ledger remain intact.
+The retention window for these observations is 90 days, which is also the
+`gpu trace prune` default. Pruning deletes only disposable scheduler
+observations, and the aggregate export reflects the deletion; jobs, transitions,
+and the accounting ledger remain intact.
 
 ## Architecture
 
