@@ -47,15 +47,15 @@ spec:
           args:
             - api
             - --addr=:8080
-            - --object-store={{ $.Values.api.objectStorage.kind | quote }}
+            - --object-store={{ $.Values.api.objectStorage.kind }}
             {{- if eq $.Values.api.objectStorage.kind "fs" }}
-            - --object-dir={{ $.Values.api.objectStorage.directory | quote }}
+            - --object-dir={{ $.Values.api.objectStorage.directory }}
             {{- else }}
-            - --s3-bucket={{ $.Values.api.objectStorage.bucket | quote }}
-            - --s3-prefix={{ $.Values.api.objectStorage.prefix | quote }}
-            - --s3-region={{ $.Values.api.objectStorage.region | quote }}
+            - --s3-bucket={{ $.Values.api.objectStorage.bucket }}
+            - --s3-prefix={{ $.Values.api.objectStorage.prefix }}
+            - --s3-region={{ $.Values.api.objectStorage.region }}
             {{- if $.Values.api.objectStorage.endpoint }}
-            - --s3-endpoint={{ $.Values.api.objectStorage.endpoint | quote }}
+            - --s3-endpoint={{ $.Values.api.objectStorage.endpoint }}
             {{- end }}
             {{- if $.Values.api.objectStorage.allowHTTP }}
             - --s3-allow-http
