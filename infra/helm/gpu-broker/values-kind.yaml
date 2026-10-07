@@ -9,7 +9,7 @@ pools:
 api:
   replicas: 2
   demo: true
-  objectStorage: { size: 1Gi, accessMode: ReadWriteOnce }
+  objectStorage: { kind: fs, directory: /objects, size: 1Gi, accessMode: ReadWriteOnce }
 agent:
   pool: kind-london
   runtime: kubernetes

@@ -44,7 +44,26 @@ spec:
           image: {{ include "gb.image" $ }}
           imagePullPolicy: {{ $.Values.image.pullPolicy }}
           {{- if eq $c "api" }}
-          args: ["api", "--addr=:8080", "--object-dir=/objects"{{ if $.Values.api.demo }}, "--demo"{{ end }}]
+          args:
+            - api
+            - --addr=:8080
+            - --object-store={{ $.Values.api.objectStorage.kind | quote }}
+            {{- if eq $.Values.api.objectStorage.kind "fs" }}
+            - --object-dir={{ $.Values.api.objectStorage.directory | quote }}
+            {{- else }}
+            - --s3-bucket={{ $.Values.api.objectStorage.bucket | quote }}
+            - --s3-prefix={{ $.Values.api.objectStorage.prefix | quote }}
+            - --s3-region={{ $.Values.api.objectStorage.region | quote }}
+            {{- if $.Values.api.objectStorage.endpoint }}
+            - --s3-endpoint={{ $.Values.api.objectStorage.endpoint | quote }}
+            {{- end }}
+            {{- if $.Values.api.objectStorage.allowHTTP }}
+            - --s3-allow-http
+            {{- end }}
+            {{- end }}
+            {{- if $.Values.api.demo }}
+            - --demo
+            {{- end }}
           {{- else if eq $c "scheduler" }}
           args: ["scheduler", "--interval={{ $.Values.scheduler.interval }}"]
           {{- else if eq $c "reconciler" }}
@@ -102,17 +121,18 @@ spec:
           {{- include "gb.containerSecurity" $ | nindent 10 }}
           volumeMounts:
             - { name: secrets, mountPath: /secrets, readOnly: true }
-            {{- if eq $c "api" }}
+            {{- if and (eq $c "api") (eq $.Values.api.objectStorage.kind "fs") }}
             - { name: objects, mountPath: /objects }
             {{- end }}
       volumes:
         {{- include "gb.secretVolume" $ | nindent 8 }}
-        {{- if eq $c "api" }}
+        {{- if and (eq $c "api") (eq $.Values.api.objectStorage.kind "fs") }}
         - name: objects
           persistentVolumeClaim: { claimName: {{ $.Release.Name }}-objects }
         {{- end }}
 ---
 {{- end }}
+{{- if eq .Values.api.objectStorage.kind "fs" }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -127,6 +147,7 @@ spec:
   {{- end }}
   resources: { requests: { storage: {{ .Values.api.objectStorage.size }} } }
 ---
+{{- end }}
 apiVersion: v1
 kind: Service
 metadata:

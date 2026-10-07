@@ -59,7 +59,8 @@ the agent a remote-code-execution service with the node's privileges.
 Uploads are resumable: the agent `PUT`s chunks at an explicit offset; the
 server answers `409` with the committed offset on mismatch, and the agent
 resumes from there. Completion carries the SHA-256 of the whole object and is
-rejected if it does not match. Object storage is behind `application.ObjectStore`;
-the shipped adapter is a filesystem store (a PVC in Kubernetes). An S3 adapter
-needs credentials this repository does not have and is listed as an external
-step.
+rejected if it does not match. Object storage is behind `application.ObjectStore`.
+The filesystem adapter is the default local/Kind path. The S3 adapter uses
+immutable chunks and conditional manifests, with credentials supplied by the
+AWS SDK provider chain. Its deployment and migration boundary are recorded in
+[ADR 0011](0011-s3-resumable-artifacts.md).

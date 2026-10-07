@@ -131,11 +131,16 @@ func runAPI(ctx context.Context, args []string, log *slog.Logger) error {
 	var c common
 	c.bind(fs)
 	addr := fs.String("addr", ":8080", "listen address")
-	objDir := fs.String("object-dir", "/var/lib/gpubroker/objects", "artifact store root (a PersistentVolume in Kubernetes)")
+	var objects artifactStoreOptions
+	objects.bind(fs)
 	demo := fs.Bool("demo", false, "enable POST /v1/demo/seed (seeded, labelled data; never in production)")
 	_ = fs.Parse(args)
 	m := metrics.New()
-	svc, store, err := service(ctx, c, m, *objDir)
+	objectStore, err := objects.build(ctx)
+	if err != nil {
+		return err
+	}
+	svc, store, err := service(ctx, c, m, objectStore)
 	if err != nil {
 		return err
 	}
@@ -163,7 +168,7 @@ func runScheduler(ctx context.Context, args []string, log *slog.Logger) error {
 		*holder, _ = os.Hostname()
 	}
 	m := metrics.New()
-	svc, store, err := service(ctx, c, m, "")
+	svc, store, err := service(ctx, c, m, nil)
 	if err != nil {
 		return err
 	}
@@ -225,7 +230,7 @@ func runReconciler(ctx context.Context, args []string, log *slog.Logger) error {
 	interval := fs.Duration("interval", 10*time.Second, "reconcile interval")
 	_ = fs.Parse(args)
 	m := metrics.New()
-	svc, store, err := service(ctx, c, m, "")
+	svc, store, err := service(ctx, c, m, nil)
 	if err != nil {
 		return err
 	}

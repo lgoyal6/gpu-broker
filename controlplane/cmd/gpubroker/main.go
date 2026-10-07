@@ -23,7 +23,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/lgoyal6/gpu-broker/controlplane/internal/adapters/metrics"
-	"github.com/lgoyal6/gpu-broker/controlplane/internal/adapters/objectstore"
 	"github.com/lgoyal6/gpu-broker/controlplane/internal/adapters/postgres"
 	"github.com/lgoyal6/gpu-broker/controlplane/internal/application"
 )
@@ -117,7 +116,7 @@ func readSecret(path, env string) ([]byte, error) {
 
 // service builds the application with its adapters. One constructor, every
 // dependency visible.
-func service(ctx context.Context, c common, m *metrics.Metrics, objectDir string) (*application.Service, *postgres.Store, error) {
+func service(ctx context.Context, c common, m *metrics.Metrics, objs application.ObjectStore) (*application.Service, *postgres.Store, error) {
 	if c.dbURL == "" {
 		return nil, nil, errors.New("--database-url or GPUB_DATABASE_URL is required")
 	}
@@ -148,14 +147,6 @@ func service(ctx context.Context, c common, m *metrics.Metrics, objectDir string
 	signer, err := application.NewLeaseSigner(key)
 	if err != nil {
 		return nil, nil, err
-	}
-	var objs application.ObjectStore
-	if objectDir != "" {
-		fs, err := objectstore.NewFS(objectDir)
-		if err != nil {
-			return nil, nil, err
-		}
-		objs = fs
 	}
 	svc := application.NewService(store, application.SystemClock{}, application.RandomIDs{}, signer, objs, m, application.DefaultConfig())
 	return svc, store, nil

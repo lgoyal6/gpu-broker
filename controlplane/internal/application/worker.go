@@ -503,7 +503,7 @@ func (s *Service) UploadChunk(ctx context.Context, p Principal, attempt domain.A
 	if p.Kind != TokenWorker {
 		return 0, ErrForbidden
 	}
-	if !artifactNameRE.MatchString(name) || len(data) > 8<<20 {
+	if !artifactNameRE.MatchString(name) || offset < 0 || len(data) > 8<<20 {
 		return 0, fmt.Errorf("%w: artifact name or chunk size (8 MiB max)", ErrInvalid)
 	}
 	var key string
@@ -519,34 +519,47 @@ func (s *Service) UploadChunk(ctx context.Context, p Principal, attempt domain.A
 		if err != nil {
 			return err
 		}
-		if existing, _, err := tx.GetArtifact(ctx, attempt, name); err == nil && existing.State == domain.ArtifactComplete {
-			return fmt.Errorf("%w: artifact already complete", ErrConflict)
-		}
 		key = artifactKey(j.TenantID, j.ID, attempt, name)
-		return tx.UpsertArtifact(ctx, domain.JobArtifact{AttemptID: attempt, Name: name, Size: offset, State: domain.ArtifactUploading}, key, s.Clock.Now())
+		if existing, _, err := tx.GetArtifact(ctx, attempt, name); err == nil {
+			if existing.State == domain.ArtifactComplete {
+				return fmt.Errorf("%w: artifact already complete", ErrConflict)
+			}
+			return nil
+		} else if !errors.Is(err, ErrNotFound) {
+			return err
+		}
+		return tx.UpsertArtifact(ctx, domain.JobArtifact{AttemptID: attempt, Name: name, State: domain.ArtifactUploading}, key, s.Clock.Now())
 	})
 	if err != nil {
 		return 0, err
 	}
-	size, err := s.Objects.Append(ctx, key, offset, data)
-	if err != nil {
+	size, appendErr := s.Objects.Append(ctx, key, offset, data)
+	if appendErr != nil {
 		var om *OffsetMismatchError
-		if !errors.As(err, &om) {
+		if !errors.As(appendErr, &om) {
 			s.Obs.ArtifactFailure("append")
+			return size, appendErr
 		}
-		return size, err
+		// Repair metadata after a lost object-store acknowledgment. Never
+		// publish the caller's requested offset as a committed byte count.
+		size = om.Committed
 	}
 	err = s.Store.InTx(ctx, func(tx Tx) error {
 		return tx.UpsertArtifact(ctx, domain.JobArtifact{AttemptID: attempt, Name: name, Size: size, State: domain.ArtifactUploading}, key, s.Clock.Now())
 	})
-	return size, err
+	if err != nil {
+		return size, err
+	}
+	return size, appendErr
 }
 
 func (s *Service) CompleteArtifact(ctx context.Context, p Principal, attempt domain.AttemptID, name, sha string) error {
 	if p.Kind != TokenWorker {
 		return ErrForbidden
 	}
-	return s.Store.InTx(ctx, func(tx Tx) error {
+	var art domain.JobArtifact
+	var key string
+	err := s.Store.InTx(ctx, func(tx Tx) error {
 		a, err := tx.GetAttempt(ctx, attempt)
 		if err != nil {
 			return err
@@ -554,28 +567,38 @@ func (s *Service) CompleteArtifact(ctx context.Context, p Principal, attempt dom
 		if a.WorkerID != p.WorkerID {
 			return ErrNotFound
 		}
-		art, key, err := tx.GetArtifact(ctx, attempt, name)
+		art, key, err = tx.GetArtifact(ctx, attempt, name)
 		if err != nil {
 			return err
 		}
-		if art.State == domain.ArtifactComplete {
-			if art.SHA256 == sha {
-				return nil // idempotent completion
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if art.State == domain.ArtifactComplete {
+		if art.SHA256 == sha {
+			return nil
+		}
+		return fmt.Errorf("%w: artifact completed with a different digest", ErrConflict)
+	}
+	// Sealing is an external write, so it is outside the retried database
+	// callback. It atomically verifies bytes and fences all in-flight uploads.
+	size, err := s.Objects.Seal(ctx, key, sha)
+	if err != nil {
+		s.Obs.ArtifactFailure("seal")
+		return err
+	}
+	return s.Store.InTx(ctx, func(tx Tx) error {
+		current, _, err := tx.GetArtifact(ctx, attempt, name)
+		if err != nil {
+			return err
+		}
+		if current.State == domain.ArtifactComplete {
+			if current.SHA256 == sha {
+				return nil
 			}
-			return fmt.Errorf("%w: artifact completed with a different digest", ErrConflict)
-		}
-		got, err := s.Objects.Digest(ctx, key)
-		if err != nil {
-			s.Obs.ArtifactFailure("digest")
-			return err
-		}
-		if got != sha {
-			s.Obs.ArtifactFailure("digest_mismatch")
-			return fmt.Errorf("%w: digest %s does not match uploaded bytes %s", ErrConflict, sha, got)
-		}
-		size, err := s.Objects.Size(ctx, key)
-		if err != nil {
-			return err
+			return ErrConflict
 		}
 		return tx.UpsertArtifact(ctx, domain.JobArtifact{AttemptID: attempt, Name: name, Size: size, SHA256: sha, State: domain.ArtifactComplete}, key, s.Clock.Now())
 	})
