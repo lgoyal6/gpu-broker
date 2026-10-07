@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>gpubroker operator</title>
+<style>
+  :root { --bg:#fff; --fg:#1b1d21; --muted:#5d6470; --line:#e3e6ea; --accent:#2457c5; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#14161a; --fg:#e6e8eb; --muted:#9aa1ab; --line:#2a2e35; --accent:#7aa2ff; } }
+  body { background:var(--bg); color:var(--fg); font:14px/1.45 system-ui, sans-serif; margin:0 auto; max-width:1100px; padding:16px; }
+  h1 { font-size:18px; } table { border-collapse:collapse; width:100%; } td,th { border-bottom:1px solid var(--line); padding:6px 8px; text-align:left; }
+  th { color:var(--muted); font-weight:500; } a { color:var(--accent); cursor:pointer; } pre { white-space:pre-wrap; font-size:12px; }
+  input { width:420px; max-width:100%; } .muted { color:var(--muted); }
+</style>
+</head>
+<body>
+<h1>gpubroker operator</h1>
+<p class="muted">Your token stays in this tab (sessionStorage). Every request goes to the authenticated API.</p>
+<form id="f"><input id="tok" type="password" placeholder="gpub_user_..."> <button>Use token</button></form>
+<h2>Pools</h2><table id="pools"></table>
+<h2>Jobs</h2><table id="jobs"></table>
+<h2 id="dh"></h2><pre id="detail"></pre>
+<script>
+const tok = () => sessionStorage.getItem("gpub_token") || "";
+document.getElementById("f").onsubmit = (e) => { e.preventDefault(); sessionStorage.setItem("gpub_token", document.getElementById("tok").value); load(); };
+async function api(path) {
+  const r = await fetch(path, { headers: { Authorization: "Bearer " + tok() } });
+  if (!r.ok) throw new Error((await r.json()).error.message);
+  return r.json();
+}
+function row(cells) { const tr = document.createElement("tr"); for (const c of cells) { const td = document.createElement("td"); if (c instanceof Node) td.appendChild(c); else td.textContent = c; tr.appendChild(td); } return tr; }
+async function load() {
+  if (!tok()) return;
+  const pools = await api("/v1/pools"); const pt = document.getElementById("pools"); pt.replaceChildren(row(["pool","region","workers","free/total GPUs","$/GPU-h"]));
+  for (const p of pools.pools) pt.appendChild(row([p.name, p.region, p.workers_ready, p.gpus_free + "/" + p.gpus_total, p.price_usd_per_gpu_hour]));
+  const jobs = await api("/v1/jobs?limit=100"); const jt = document.getElementById("jobs"); jt.replaceChildren(row(["job","state","gpus","policy","submitted"]));
+  for (const j of jobs.jobs) { const a = document.createElement("a"); a.textContent = j.id; a.onclick = () => show(j.id); jt.appendChild(row([a, j.state, j.gpus, j.policy, j.submitted_at])); }
+}
+async function show(id) {
+  const [d, dec] = await Promise.all([api("/v1/jobs/" + id), api("/v1/jobs/" + id + "/decisions")]);
+  document.getElementById("dh").textContent = id;
+  document.getElementById("detail").textContent = JSON.stringify({ job: d, decisions: dec.decisions }, null, 2);
+}
+load().catch(e => { document.getElementById("detail").textContent = String(e); });
+</script>
+</body>
+</html>

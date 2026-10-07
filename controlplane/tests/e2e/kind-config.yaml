@@ -1,0 +1,13 @@
+# 4 nodes: the control plane runs on "infra"; two nodes declare virtual GPUs
+# for the worker agent. Draining a GPU node never touches the database.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: gpub
+nodes:
+  - role: control-plane
+  - role: worker
+    labels: { gpub.dev/infra: "true" }
+  - role: worker
+    labels: { gpub.dev/pool: kind-london }
+  - role: worker
+    labels: { gpub.dev/pool: kind-london }
