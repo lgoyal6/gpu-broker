@@ -1,0 +1,146 @@
+{
+ "editable": false,
+ "panels": [
+  {
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short"
+    },
+    "overrides": []
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 0,
+    "y": 0
+   },
+   "id": 1,
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    }
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "expr": "sum by (pool) (gpub_pool_gpus{state=\"reserved\"})",
+     "refId": "A"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "expr": "sum by (pool) (gpub_pool_gpus{state=\"total\"})",
+     "refId": "B"
+    }
+   ],
+   "title": "GPUs reserved / total",
+   "type": "timeseries"
+  },
+  {
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percentunit"
+    },
+    "overrides": []
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 12,
+    "y": 0
+   },
+   "id": 2,
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    }
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "expr": "sum by (pool) (gpub_pool_gpus{state=\"reserved\"}) / clamp_min(sum by (pool) (gpub_pool_gpus{state=\"total\"}), 1)",
+     "refId": "A"
+    }
+   ],
+   "title": "Allocation (reserved / total)",
+   "type": "timeseries"
+  },
+  {
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percentunit"
+    },
+    "overrides": []
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 0,
+    "y": 8
+   },
+   "id": 3,
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    }
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "expr": "gpub_pool_fragmentation_ratio",
+     "refId": "A"
+    }
+   ],
+   "title": "Fragmentation (1 - largest free block / free)",
+   "type": "timeseries"
+  }
+ ],
+ "refresh": "30s",
+ "schemaVersion": 39,
+ "tags": [
+  "gpu-broker"
+ ],
+ "templating": {
+  "list": [
+   {
+    "label": "Prometheus",
+    "name": "datasource",
+    "query": "prometheus",
+    "type": "datasource"
+   }
+  ]
+ },
+ "time": {
+  "from": "now-6h",
+  "to": "now"
+ },
+ "title": "GPU broker: pool capacity",
+ "uid": "gpub-pool-capacity",
+ "version": 1
+}

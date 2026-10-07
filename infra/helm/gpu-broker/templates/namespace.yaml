@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Values.jobsNamespace }}
+  labels:
+    {{- include "gb.labels" . | nindent 4 }}
+    # Attempt pods are already non-root and capability-free (ADR 0007); the
+    # namespace enforces it for anything else created there.
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest

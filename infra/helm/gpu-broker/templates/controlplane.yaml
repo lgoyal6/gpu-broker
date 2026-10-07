@@ -1,0 +1,179 @@
+{{- $root := . }}
+{{- range $c := list "api" "scheduler" "reconciler" "status" }}
+{{- $v := index $.Values $c }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $.Release.Name }}-{{ $c }}
+  labels: {{- include "gb.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $c }}
+spec:
+  replicas: {{ $v.replicas }}
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }
+  selector:
+    matchLabels: {{- include "gb.selector" (dict "root" $ "component" $c) | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "gb.labels" $ | nindent 8 }}
+        app.kubernetes.io/component: {{ $c }}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        {{- with $.Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ $.Release.Name }}-{{ $c }}
+      automountServiceAccountToken: false
+      {{- include "gb.podSecurity" $ | nindent 6 }}
+      {{- include "gb.cpPlacement" $ | nindent 6 }}
+      {{- if gt (int $v.replicas) 1 }}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: {{- include "gb.selector" (dict "root" $ "component" $c) | nindent 14 }}
+      {{- end }}
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: {{ $c }}
+          image: {{ include "gb.image" $ }}
+          imagePullPolicy: {{ $.Values.image.pullPolicy }}
+          {{- if eq $c "api" }}
+          args: ["api", "--addr=:8080", "--object-dir=/objects"{{ if $.Values.api.demo }}, "--demo"{{ end }}]
+          {{- else if eq $c "scheduler" }}
+          args: ["scheduler", "--interval={{ $.Values.scheduler.interval }}"]
+          {{- else if eq $c "reconciler" }}
+          args: ["reconciler", "--interval={{ $.Values.reconciler.interval }}"]
+          {{- else }}
+          args: ["status", "--addr=:8081", "--cache-ttl={{ $.Values.status.cacheTTL }}"]
+          {{- end }}
+          env:
+            {{- if eq $c "status" }}
+            - name: GPUB_STATUS_DATABASE_URL
+              valueFrom: { secretKeyRef: { name: {{ include "gb.dbSecretName" $ }}, key: status-url } }
+            {{- else }}
+            {{- include "gb.dbEnv" $ | nindent 12 }}
+            {{- end }}
+          ports:
+            - { name: metrics, containerPort: 9090 }
+            {{- if eq $c "api" }}
+            - { name: http, containerPort: 8080 }
+            {{- else if eq $c "status" }}
+            - { name: http, containerPort: 8081 }
+            {{- end }}
+          {{- if or (eq $c "api") (eq $c "status") }}
+          # Endpoint removal propagates asynchronously. Keep HTTP serving
+          # before SIGTERM, then let the process drain in-flight requests.
+          lifecycle:
+            preStop:
+              sleep: { seconds: 5 }
+          startupProbe:
+            httpGet: { path: {{ if eq $c "api" }}/readyz{{ else }}/healthz{{ end }}, port: http }
+            periodSeconds: 2
+            failureThreshold: 90
+          readinessProbe:
+            httpGet: { path: {{ if eq $c "api" }}/readyz{{ else }}/status.json{{ end }}, port: http }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+            failureThreshold: 3
+          {{- else }}
+          # Background roles expose only metrics; the metrics server starts
+          # once the schema is ready, so it doubles as the readiness signal.
+          startupProbe:
+            tcpSocket: { port: metrics }
+            periodSeconds: 2
+            failureThreshold: 90
+          readinessProbe:
+            tcpSocket: { port: metrics }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /metrics, port: metrics }
+            periodSeconds: 15
+            failureThreshold: 4
+          {{- end }}
+          resources: {{- toYaml $v.resources | nindent 12 }}
+          {{- include "gb.containerSecurity" $ | nindent 10 }}
+          volumeMounts:
+            - { name: secrets, mountPath: /secrets, readOnly: true }
+            {{- if eq $c "api" }}
+            - { name: objects, mountPath: /objects }
+            {{- end }}
+      volumes:
+        {{- include "gb.secretVolume" $ | nindent 8 }}
+        {{- if eq $c "api" }}
+        - name: objects
+          persistentVolumeClaim: { claimName: {{ $.Release.Name }}-objects }
+        {{- end }}
+---
+{{- end }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Release.Name }}-objects
+  labels: {{- include "gb.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: [{{ .Values.api.objectStorage.accessMode }}]
+  {{- if .Values.api.objectStorage.storageClass }}
+  storageClassName: {{ .Values.api.objectStorage.storageClass }}
+  {{- end }}
+  resources: { requests: { storage: {{ .Values.api.objectStorage.size }} } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-api
+  labels: {{- include "gb.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+spec:
+  selector: {{- include "gb.selector" (dict "root" . "component" "api") | nindent 4 }}
+  ports:
+    - { name: http, port: 8080, targetPort: http }
+    - { name: metrics, port: 9090, targetPort: metrics }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-status
+  labels: {{- include "gb.labels" . | nindent 4 }}
+    app.kubernetes.io/component: status
+spec:
+  selector: {{- include "gb.selector" (dict "root" . "component" "status") | nindent 4 }}
+  ports:
+    - { name: http, port: 8081, targetPort: http }
+    - { name: metrics, port: 9090, targetPort: metrics }
+---
+{{- range $c := list "scheduler" "reconciler" }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $.Release.Name }}-{{ $c }}-metrics
+  labels: {{- include "gb.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $c }}
+spec:
+  clusterIP: None
+  selector: {{- include "gb.selector" (dict "root" $ "component" $c) | nindent 4 }}
+  ports: [{ name: metrics, port: 9090, targetPort: metrics }]
+---
+{{- end }}
+{{- range $c := list "api" "scheduler" "status" }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $.Release.Name }}-{{ $c }}
+  labels: {{- include "gb.labels" $ | nindent 4 }}
+spec:
+  # A drain may take one replica at a time; with 2 replicas, one stays.
+  maxUnavailable: 1
+  selector:
+    matchLabels: {{- include "gb.selector" (dict "root" $ "component" $c) | nindent 6 }}
+---
+{{- end }}

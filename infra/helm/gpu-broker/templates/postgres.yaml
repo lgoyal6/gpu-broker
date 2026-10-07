@@ -1,0 +1,57 @@
+{{- if .Values.postgresql.enabled }}
+# Local and Kind only: one replica, no backups, no HA.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ .Release.Name }}-postgres
+  labels: {{- include "gb.labels" . | nindent 4 }}
+    app.kubernetes.io/component: postgres
+spec:
+  serviceName: {{ .Release.Name }}-postgres
+  replicas: 1
+  selector:
+    matchLabels: {{- include "gb.selector" (dict "root" . "component" "postgres") | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "gb.labels" . | nindent 8 }}
+        app.kubernetes.io/component: postgres
+    spec:
+      securityContext: { runAsNonRoot: true, runAsUser: 70, fsGroup: 70, seccompProfile: { type: RuntimeDefault } }
+      {{- include "gb.cpPlacement" . | nindent 6 }}
+      containers:
+        - name: postgres
+          image: {{ .Values.postgresql.image }}
+          env:
+            - { name: POSTGRES_USER, value: gpub }
+            - { name: POSTGRES_DB, value: gpub }
+            - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
+            - name: POSTGRES_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ include "gb.dbSecretName" . }}, key: postgres-password } }
+          ports: [{ name: pg, containerPort: 5432 }]
+          securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: [ALL] } }
+          readinessProbe:
+            exec: { command: ["pg_isready", "-U", "gpub", "-d", "gpub"] }
+            periodSeconds: 3
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { cpu: "1", memory: 1Gi }
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/postgresql/data }
+            - { name: run, mountPath: /var/run/postgresql }
+      volumes:
+        - { name: run, emptyDir: {} }
+  volumeClaimTemplates:
+    - metadata: { name: data }
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources: { requests: { storage: {{ .Values.postgresql.storage }} } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-postgres
+  labels: {{- include "gb.labels" . | nindent 4 }}
+spec:
+  selector: {{- include "gb.selector" (dict "root" . "component" "postgres") | nindent 4 }}
+  ports: [{ name: pg, port: 5432, targetPort: pg }]
+{{- end }}

@@ -1,0 +1,71 @@
+name: controlplane
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16.6-alpine@sha256:1d04b9ba1d4996401f2552b51beda8187f175c0645c091e4781134fc9c9a3eef
+        env:
+          POSTGRES_USER: gpub
+          POSTGRES_PASSWORD: gpub
+          POSTGRES_DB: gpub
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U gpub" --health-interval 5s --health-timeout 5s --health-retries 12
+    defaults:
+      run:
+        working-directory: controlplane
+    env:
+      GPUB_TEST_DATABASE_URL: postgres://gpub:gpub@localhost:5432/gpub?sslmode=disable
+      GPUB_REQUIRE_DB: "1"
+      GOMAXPROCS: "2"
+      GOFLAGS: -p=2
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version-file: controlplane/go.mod
+          cache-dependency-path: controlplane/go.sum
+      - name: Format and static analysis
+        run: |
+          test -z "$(gofmt -l cmd internal migrations)"
+          go vet ./...
+      - name: Unit, contract, database and race tests
+        run: go test -race -count=1 -timeout=15m ./...
+
+  kind:
+    needs: test
+    runs-on: ubuntu-latest
+    env:
+      GOMAXPROCS: "2"
+      GOFLAGS: -p=2
+      OUT: ${{ github.workspace }}/kind-e2e.json
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version-file: controlplane/go.mod
+          cache-dependency-path: controlplane/go.sum
+      - name: Install pinned deployment tools
+        run: |
+          go install sigs.k8s.io/kind@v0.33.0
+          curl -fsSLO https://get.helm.sh/helm-v4.3.0-linux-amd64.tar.gz
+          curl -fsSLO https://get.helm.sh/helm-v4.3.0-linux-amd64.tar.gz.sha256sum
+          sha256sum -c helm-v4.3.0-linux-amd64.tar.gz.sha256sum
+          tar -xzf helm-v4.3.0-linux-amd64.tar.gz
+          sudo install linux-amd64/helm /usr/local/bin/helm
+      - name: Rollout, rollback and failure recovery
+        run: bash controlplane/tests/e2e/kind.sh
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        if: always()
+        with:
+          name: kind-e2e
+          path: kind-e2e.json
+          if-no-files-found: warn

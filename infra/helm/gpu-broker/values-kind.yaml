@@ -1,0 +1,35 @@
+# Kind profile: bundled Postgres, sim-free Kubernetes runtime with declared
+# (virtual) GPUs, real attempt containers, replayed carbon, demo endpoint on.
+postgresql:
+  enabled: true
+controlPlane:
+  nodeSelector: { gpub.dev/infra: "true" }
+pools:
+  - { id: kind-london, name: kind-london, kind: kubernetes, region: gb-london, priceUsd: 2.40, interruptible: false, pue: 1.2 }
+api:
+  replicas: 2
+  demo: true
+  objectStorage: { size: 1Gi, accessMode: ReadWriteOnce }
+agent:
+  pool: kind-london
+  runtime: kubernetes
+  gpuModel: vgpu
+  gpusPerNode: 4
+  gpuMemGb: 16
+  gpuResource: ""          # no device plugin in Kind: GPUs are declared, not requested
+  nodeSelector: { gpub.dev/pool: kind-london }
+  tolerations: []
+  attemptCPU: 100m
+  attemptMemory: 64Mi
+  heartbeat: 3s
+scheduler:
+  interval: 1s
+reconciler:
+  interval: 3s
+carbon:
+  fixtureReplay: true
+  map: "gb-london=gb-london"
+image:
+  repository: gpubroker
+  tag: dev
+  pullPolicy: Never
