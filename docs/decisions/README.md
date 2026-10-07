@@ -16,3 +16,4 @@ supersedes the old one.
 | [0008](0008-tenancy-auth-and-public-status.md) | Tenancy, authentication, and the read-only public status surface |
 | [0009](0009-evidence-classes.md) | Simulator, seeded demo, pilot, and real-user evidence are never mixed |
 | [0010](0010-kubernetes-deployment.md) | Helm chart, Kind CI path, and the optional real GPU profile |
+| [0011](0011-s3-resumable-artifacts.md) | Immutable S3 chunks, conditional upload manifests, and durable completion seals |

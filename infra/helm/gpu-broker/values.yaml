@@ -59,8 +59,16 @@ api:
   replicas: 2
   demo: false
   objectStorage:
-    # Artifacts and logs. RWX lets every API replica serve every artifact;
-    # with RWO keep replicas: 1 or use an S3 adapter (not shipped).
+    # fs is the local/Kind adapter. s3 uses immutable chunks and conditional
+    # manifests, so replicas do not share a volume. Credentials come from
+    # the AWS SDK provider chain or the pod's workload identity.
+    kind: fs
+    directory: /objects
+    bucket: ""
+    prefix: gpubroker
+    region: us-east-1
+    endpoint: ""
+    allowHTTP: false
     size: 5Gi
     accessMode: ReadWriteOnce
     storageClass: ""

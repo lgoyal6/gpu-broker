@@ -216,7 +216,7 @@ func runAdmin(ctx context.Context, args []string) error {
 		// constructor without requiring the real secret on an operator laptop.
 		os.Setenv("GPUB_DISPATCH_KEY", strings.Repeat("a", 32))
 	}
-	svc, store, err := service(ctx, c, metrics.New(), "")
+	svc, store, err := service(ctx, c, metrics.New(), nil)
 	if err != nil {
 		return err
 	}

@@ -91,9 +91,13 @@ go tool pprof /tmp/gpub-cpu.prof
 ## Current boundaries
 
 - Kind declares virtual GPUs. Real GPU/device-plugin behavior needs hardware validation.
-- Object storage uses a shared filesystem. Production replicas need an RWX
-  volume; an S3 adapter is not implemented. The Kind RWO profile keeps API
-  replicas on one infrastructure node.
+- Object storage defaults to a filesystem. Production can set
+  `api.objectStorage.kind=s3`, `bucket`, `prefix`, and `region`; the API then
+  uses immutable chunks and conditional manifests through the AWS SDK's
+  workload credential chain, so replicas do not share a volume. The S3 bucket
+  must already exist and stay private. `s3.allowHTTP` is only for an isolated
+  local compatibility service. Existing filesystem objects are not migrated
+  automatically.
 - Carbon data is a historical fixture. Production needs a live provider;
   stale or missing data triggers an explicit fallback.
 - Forecast evaluation includes a persistence baseline. A forecast must pass

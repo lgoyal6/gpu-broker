@@ -204,6 +204,9 @@ type ObjectStore interface {
 	Size(ctx context.Context, key string) (int64, error)
 	Read(ctx context.Context, key string, offset int64, max int) ([]byte, error)
 	Digest(ctx context.Context, key string) (string, error)
+	// Seal verifies the complete digest and irreversibly prevents appends.
+	// Repeating the same digest is safe after a database or response failure.
+	Seal(ctx context.Context, key, sha256 string) (int64, error)
 }
 
 type OffsetMismatchError struct{ Committed int64 }
