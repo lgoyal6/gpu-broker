@@ -1,0 +1,625 @@
+openapi: 3.0.3
+info:
+  title: gpubroker control plane API
+  version: "1.0.0"
+  description: |
+    Authenticated job, pool and worker API for the multi-pool GPU broker.
+    Every route requires `Authorization: Bearer <token>`. User mutations
+    require an `Idempotency-Key` header; replaying a key with the same body
+    returns the stored response with `Idempotent-Replay: true`, and replaying
+    it with a different body is `422 idempotency_key_reused`.
+
+    Errors use one envelope (`ErrorBody`); `error.code` is stable.
+    This document is the contract: `internal/transport/httpapi/contract_test.go`
+    validates live responses against it, and `gpuctl` uses a client generated
+    from it.
+servers:
+  - url: http://localhost:8080
+security:
+  - bearer: []
+paths:
+  /v1/jobs:
+    post:
+      operationId: submitJob
+      parameters: [{ $ref: "#/components/parameters/IdempotencyKey" }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/SubmitJobRequest" } } }
+      responses:
+        "201": { description: "Admitted and queued", content: { application/json: { schema: { $ref: "#/components/schemas/Job" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+    get:
+      operationId: listJobs
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 500 } }
+      responses:
+        "200": { description: "The caller's tenant's jobs, newest first", content: { application/json: { schema: { $ref: "#/components/schemas/JobList" } } } }
+        "401": { $ref: "#/components/responses/Error" }
+  /v1/jobs/{id}:
+    parameters: [{ $ref: "#/components/parameters/JobID" }]
+    get:
+      operationId: getJob
+      responses:
+        "200": { description: "Job with transitions, budget and artifacts", content: { application/json: { schema: { $ref: "#/components/schemas/JobDetail" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+  /v1/jobs/{id}/cancel:
+    parameters: [{ $ref: "#/components/parameters/JobID" }]
+    post:
+      operationId: cancelJob
+      description: Idempotent. A running job moves to CANCEL_REQUESTED; a queued or reserved one to CANCELLED.
+      parameters: [{ $ref: "#/components/parameters/IdempotencyKey" }]
+      responses:
+        "200": { description: "The job after the request", content: { application/json: { schema: { $ref: "#/components/schemas/Job" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+  /v1/jobs/{id}/decisions:
+    parameters: [{ $ref: "#/components/parameters/JobID" }]
+    get:
+      operationId: jobDecisions
+      responses:
+        "200": { description: "Every recorded scheduling decision for the job", content: { application/json: { schema: { $ref: "#/components/schemas/DecisionList" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+  /v1/jobs/{id}/logs:
+    parameters: [{ $ref: "#/components/parameters/JobID" }]
+    get:
+      operationId: jobLogs
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 5000 } }
+      responses:
+        "200": { description: "Log, start and exit events across attempts", content: { application/json: { schema: { $ref: "#/components/schemas/LogList" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+  /v1/jobs/{id}/artifacts/{attempt}/{name}:
+    parameters:
+      - { $ref: "#/components/parameters/JobID" }
+      - { name: attempt, in: path, required: true, schema: { type: string } }
+      - { name: name, in: path, required: true, schema: { type: string } }
+    get:
+      operationId: downloadArtifact
+      parameters:
+        - { name: offset, in: query, schema: { type: integer, format: int64, minimum: 0 } }
+      responses:
+        "200": { description: "Up to 8 MiB of the artifact from offset", content: { application/octet-stream: { schema: { type: string, format: binary } } } }
+        "404": { $ref: "#/components/responses/Error" }
+  /v1/pools:
+    get:
+      operationId: listPools
+      responses:
+        "200": { description: "Pools with live capacity", content: { application/json: { schema: { $ref: "#/components/schemas/PoolList" } } } }
+  /v1/policies:
+    get:
+      operationId: listPolicies
+      responses:
+        "200": { description: "Builtin policies and their versioned specs", content: { application/json: { schema: { $ref: "#/components/schemas/PolicyList" } } } }
+  /v1/policy/explain:
+    post:
+      operationId: explainPolicy
+      description: Runs the policy against the live snapshot for a hypothetical job. Writes nothing.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/SubmitJobRequest" } } }
+      responses:
+        "200": { description: "The decision the scheduler would make now", content: { application/json: { schema: { $ref: "#/components/schemas/Decision" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+  /v1/users:
+    post:
+      operationId: createUser
+      parameters: [{ $ref: "#/components/parameters/IdempotencyKey" }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/CreateUserRequest" } } }
+      responses:
+        "201": { description: "Created; the token is shown once", content: { application/json: { schema: { $ref: "#/components/schemas/CreateUserResult" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+  /v1/trace/export:
+    get:
+      operationId: exportTrace
+      responses:
+        "200": { description: "Privacy-bounded trace of the operator's tenant", content: { application/json: { schema: { $ref: "#/components/schemas/Trace" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /v1/demo/seed:
+    post:
+      operationId: demoSeed
+      description: Only when the API runs with --demo. Creates fictional seeded tenants through the real submit path.
+      responses:
+        "201": { description: "Seeded personas", content: { application/json: { schema: { $ref: "#/components/schemas/DemoSeedResult" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+  /v1/workers/register:
+    post:
+      operationId: registerWorker
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/RegisterWorkerRequest" } } }
+      responses:
+        "201": { description: "Registered; the worker token is shown once", content: { application/json: { schema: { $ref: "#/components/schemas/RegisterWorkerResult" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+  /v1/workers/heartbeat:
+    post:
+      operationId: heartbeat
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/HeartbeatRequest" } } }
+      responses:
+        "200": { description: "Renewed leases and stop orders", content: { application/json: { schema: { $ref: "#/components/schemas/HeartbeatResult" } } } }
+  /v1/workers/claim:
+    post:
+      operationId: claimDispatches
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/ClaimRequest" } } }
+      responses:
+        "200": { description: "Signed dispatches for this worker", content: { application/json: { schema: { $ref: "#/components/schemas/ClaimResponse" } } } }
+  /v1/attempts/{id}/ack:
+    parameters: [{ $ref: "#/components/parameters/AttemptID" }]
+    post:
+      operationId: ackDispatch
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/Dispatch" } } }
+      responses:
+        "200": { description: "run or cancel", content: { application/json: { schema: { $ref: "#/components/schemas/AckResponse" } } } }
+        "409": { $ref: "#/components/responses/Error" }
+  /v1/attempts/{id}/events:
+    parameters: [{ $ref: "#/components/parameters/AttemptID" }]
+    post:
+      operationId: reportEvents
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/EventsRequest" } } }
+      responses:
+        "200": { description: "The attempt's outcome if terminal", content: { application/json: { schema: { $ref: "#/components/schemas/EventsResponse" } } } }
+  /v1/attempts/{id}/artifacts/{name}:
+    parameters:
+      - { $ref: "#/components/parameters/AttemptID" }
+      - { name: name, in: path, required: true, schema: { type: string } }
+    put:
+      operationId: uploadArtifactChunk
+      parameters:
+        - { name: offset, in: query, required: true, schema: { type: integer, format: int64, minimum: 0 } }
+      requestBody:
+        required: true
+        content: { application/octet-stream: { schema: { type: string, format: binary } } }
+      responses:
+        "200": { description: "New committed size", content: { application/json: { schema: { $ref: "#/components/schemas/UploadResponse" } } } }
+        "409": { $ref: "#/components/responses/Error" }
+  /v1/attempts/{id}/artifacts/{name}/complete:
+    parameters:
+      - { $ref: "#/components/parameters/AttemptID" }
+      - { name: name, in: path, required: true, schema: { type: string } }
+    post:
+      operationId: completeArtifact
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/CompleteArtifactRequest" } } }
+      responses:
+        "204": { description: Verified and complete }
+        "409": { $ref: "#/components/responses/Error" }
+components:
+  securitySchemes:
+    bearer: { type: http, scheme: bearer }
+  parameters:
+    IdempotencyKey: { name: Idempotency-Key, in: header, required: true, schema: { type: string, minLength: 1, maxLength: 128 } }
+    JobID: { name: id, in: path, required: true, schema: { type: string } }
+    AttemptID: { name: id, in: path, required: true, schema: { type: string } }
+  responses:
+    Error:
+      description: Stable error envelope
+      content: { application/json: { schema: { $ref: "#/components/schemas/ErrorBody" } } }
+  schemas:
+    ErrorBody:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message, request_id]
+          properties:
+            code:
+              type: string
+              enum: [unauthorized, forbidden, not_found, invalid_request, idempotency_key_reused, budget_insufficient,
+                     quota_exceeded, queue_full, already_acknowledged, lease_invalid, conflict, unavailable,
+                     illegal_transition, offset_mismatch, internal]
+            message: { type: string }
+            hint: { type: string }
+            request_id: { type: string }
+            job_id: { type: string }
+            offset: { type: integer, format: int64 }
+    SubmitJobRequest:
+      type: object
+      additionalProperties: false
+      required: [image, command, gpus, max_runtime_s]
+      properties:
+        project_id: { type: string }
+        image: { type: string }
+        command: { type: array, items: { type: string }, minItems: 1, maxItems: 64 }
+        gpus: { type: integer, minimum: 1, maximum: 64 }
+        gpu_model: { type: string }
+        min_gpu_mem_gb: { type: integer, minimum: 0 }
+        runtime: { type: string, enum: ["", sim, kubernetes] }
+        priority: { type: integer, minimum: 0, maximum: 9 }
+        preemptible: { type: boolean }
+        deadline: { type: string, format: date-time }
+        max_runtime_s: { type: integer, format: int64, minimum: 1 }
+        max_delay_s: { type: integer, format: int64, minimum: 0 }
+        budget_cap_usd: { type: number, minimum: 0 }
+        policy: { type: string }
+        allowed_pools: { type: array, items: { type: string } }
+        max_attempts: { type: integer, minimum: 0, maximum: 10 }
+    JobState:
+      type: string
+      enum: [SUBMITTED, QUEUED, RESERVED, DISPATCHED, RUNNING, CANCEL_REQUESTED, SUCCEEDED, FAILED, CANCELLED, EXPIRED]
+    Job:
+      type: object
+      additionalProperties: false
+      required: [id, project_id, state, image, command, gpus, gpu_model, priority, preemptible, policy, attempt, max_attempts,
+                 max_runtime_s, max_delay_s, deadline, not_before, submitted_at, started_at, finished_at, evidence_class]
+      properties:
+        id: { type: string }
+        project_id: { type: string }
+        state: { $ref: "#/components/schemas/JobState" }
+        image: { type: string }
+        command: { type: array, items: { type: string } }
+        gpus: { type: integer }
+        gpu_model: { type: string }
+        priority: { type: integer }
+        preemptible: { type: boolean }
+        policy: { type: string }
+        attempt: { type: integer }
+        max_attempts: { type: integer }
+        max_runtime_s: { type: integer, format: int64 }
+        max_delay_s: { type: integer, format: int64 }
+        deadline: { type: string, format: date-time, nullable: true }
+        not_before: { type: string, format: date-time, nullable: true }
+        submitted_at: { type: string, format: date-time }
+        started_at: { type: string, format: date-time, nullable: true }
+        finished_at: { type: string, format: date-time, nullable: true }
+        evidence_class: { type: string, enum: [simulator, seeded, pilot, real] }
+    JobList:
+      type: object
+      additionalProperties: false
+      required: [jobs]
+      properties:
+        jobs: { type: array, items: { $ref: "#/components/schemas/Job" } }
+    Transition:
+      type: object
+      additionalProperties: false
+      required: [from, to, actor_kind, reason, at, correlation_id]
+      properties:
+        from: { $ref: "#/components/schemas/JobState" }
+        to: { $ref: "#/components/schemas/JobState" }
+        actor_kind: { type: string, enum: [user, operator, scheduler, worker, reconciler, system] }
+        reason: { type: string }
+        at: { type: string, format: date-time }
+        correlation_id: { type: string }
+    Budget:
+      type: object
+      additionalProperties: false
+      required: [held_usd, settled_usd, released_usd, outstanding_usd]
+      properties:
+        held_usd: { type: number }
+        settled_usd: { type: number }
+        released_usd: { type: number }
+        outstanding_usd: { type: number }
+    Artifact:
+      type: object
+      additionalProperties: false
+      required: [attempt_id, name, size, sha256, state]
+      properties:
+        attempt_id: { type: string }
+        name: { type: string }
+        size: { type: integer, format: int64 }
+        sha256: { type: string }
+        state: { type: string, enum: [UPLOADING, COMPLETE] }
+    JobDetail:
+      type: object
+      additionalProperties: false
+      required: [job, transitions, budget, artifacts]
+      properties:
+        job: { $ref: "#/components/schemas/Job" }
+        transitions: { type: array, items: { $ref: "#/components/schemas/Transition" } }
+        budget: { $ref: "#/components/schemas/Budget" }
+        artifacts: { type: array, items: { $ref: "#/components/schemas/Artifact" } }
+    ScoreComponent:
+      type: object
+      additionalProperties: false
+      required: [name, raw, normalized, weight, contribution]
+      properties:
+        name: { type: string, enum: [fit, cost, carbon, deadline] }
+        raw: { type: number }
+        normalized: { type: number }
+        weight: { type: number }
+        contribution: { type: number }
+    Candidate:
+      type: object
+      additionalProperties: false
+      required: [worker_id, pool_id, region, score, components, cost_micro_usd, carbon_grams]
+      properties:
+        worker_id: { type: string }
+        pool_id: { type: string }
+        region: { type: string }
+        score: { type: number }
+        components: { type: array, items: { $ref: "#/components/schemas/ScoreComponent" } }
+        cost_micro_usd: { type: integer, format: int64 }
+        carbon_grams: { type: number, nullable: true }
+    Rejection:
+      type: object
+      additionalProperties: false
+      required: [worker_id, pool_id, reason]
+      properties:
+        worker_id: { type: string }
+        pool_id: { type: string }
+        reason:
+          type: string
+          enum: [gpu_model_mismatch, gpu_memory_insufficient, runtime_unsupported, gpu_count_exceeds_worker,
+                 insufficient_free_gpus, worker_not_ready, pool_not_allowed, budget_insufficient, deadline_unreachable,
+                 held_for_starving_job, interruptible_without_retries]
+        detail: { type: string }
+    Decision:
+      type: object
+      additionalProperties: false
+      required: [job_id, policy_version, action, reason, order, candidates_considered, candidates_rejected, candidates_scored,
+                 expected_start, budget_effect_micro_usd, price_micro_usd_per_gpu_hour, carbon_effect_grams, fallbacks, input_digest]
+      properties:
+        job_id: { type: string }
+        policy_version: { type: string }
+        action: { type: string, enum: [PLACE, DELAY, WAIT, PREEMPT, EXPIRE] }
+        reason: { type: string }
+        order:
+          type: object
+          additionalProperties: false
+          required: [position, score, terms]
+          properties:
+            position: { type: integer }
+            score: { type: number }
+            terms: { type: array, nullable: true, items: { type: string } }
+        candidates_considered: { type: integer }
+        candidates_rejected: { type: array, items: { $ref: "#/components/schemas/Rejection" } }
+        candidates_scored: { type: array, items: { $ref: "#/components/schemas/Candidate" } }
+        chosen_worker: { type: string }
+        chosen_pool: { type: string }
+        expected_start: { type: string, format: date-time, nullable: true }
+        delay_until: { type: string, format: date-time, nullable: true }
+        budget_effect_micro_usd: { type: integer, format: int64 }
+        price_micro_usd_per_gpu_hour: { type: integer, format: int64 }
+        carbon_effect_grams: { type: number, nullable: true }
+        carbon_basis: { type: string }
+        carbon_source: { type: string }
+        carbon_saved_grams: { type: number, nullable: true }
+        fallbacks: { type: array, items: { type: string } }
+        input_digest: { type: string }
+    DecisionList:
+      type: object
+      additionalProperties: false
+      required: [decisions]
+      properties:
+        decisions: { type: array, items: { $ref: "#/components/schemas/Decision" } }
+    LogLine:
+      type: object
+      additionalProperties: false
+      required: [attempt_id, seq, kind, at, message]
+      properties:
+        attempt_id: { type: string }
+        seq: { type: integer, format: int64 }
+        kind: { type: string }
+        at: { type: string, format: date-time }
+        message: { type: string }
+    LogList:
+      type: object
+      additionalProperties: false
+      required: [lines]
+      properties:
+        lines: { type: array, items: { $ref: "#/components/schemas/LogLine" } }
+    Pool:
+      type: object
+      additionalProperties: false
+      required: [id, name, kind, region, price_usd_per_gpu_hour, interruptible, workers_ready, gpus_total, gpus_free, gpu_models]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        kind: { type: string, enum: [kubernetes, simulated] }
+        region: { type: string }
+        price_usd_per_gpu_hour: { type: number }
+        interruptible: { type: boolean }
+        workers_ready: { type: integer }
+        gpus_total: { type: integer }
+        gpus_free: { type: integer }
+        gpu_models: { type: array, items: { type: string } }
+    PoolList:
+      type: object
+      additionalProperties: false
+      required: [pools]
+      properties:
+        pools: { type: array, items: { $ref: "#/components/schemas/Pool" } }
+    PolicyList:
+      type: object
+      additionalProperties: false
+      required: [default, policies]
+      properties:
+        default: { type: string }
+        policies:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [name, version, spec]
+            properties:
+              name: { type: string }
+              version: { type: string }
+              spec: { type: object }
+    CreateUserRequest:
+      type: object
+      additionalProperties: false
+      required: [handle, role]
+      properties:
+        handle: { type: string }
+        role: { type: string, enum: [member, operator] }
+    CreateUserResult:
+      type: object
+      additionalProperties: false
+      required: [user_id, token]
+      properties:
+        user_id: { type: string }
+        token: { type: string }
+    TraceJob:
+      type: object
+      additionalProperties: false
+      required: [job_key, user_key, gpus, gpu_model, priority, preemptible, max_runtime_s, max_delay_s, deadline_offset_seconds,
+                 state, attempts, submitted_offset_seconds, started_offset_seconds, finished_offset_seconds]
+      properties:
+        job_key: { type: string }
+        user_key: { type: string }
+        gpus: { type: integer }
+        gpu_model: { type: string }
+        priority: { type: integer }
+        preemptible: { type: boolean }
+        max_runtime_s: { type: integer, format: int64 }
+        max_delay_s: { type: integer, format: int64 }
+        deadline_offset_seconds: { type: number, nullable: true }
+        state: { $ref: "#/components/schemas/JobState" }
+        attempts: { type: integer }
+        submitted_offset_seconds: { type: number }
+        started_offset_seconds: { type: number, nullable: true }
+        finished_offset_seconds: { type: number, nullable: true }
+    Trace:
+      type: object
+      additionalProperties: false
+      required: [schema, source, evidence_class, privacy_excluded, jobs, digest]
+      properties:
+        schema: { type: string, enum: [gpu-broker.controlplane-trace/v1] }
+        source: { type: string }
+        evidence_class: { type: string }
+        privacy_excluded: { type: array, items: { type: string } }
+        jobs: { type: array, items: { $ref: "#/components/schemas/TraceJob" } }
+        digest: { type: string }
+    DemoSeedResult:
+      type: object
+      additionalProperties: false
+      required: [evidence_class, personas]
+      properties:
+        evidence_class: { type: string, enum: [seeded] }
+        personas:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [name, token, jobs]
+            properties:
+              name: { type: string }
+              token: { type: string }
+              jobs: { type: integer }
+    RegisterWorkerRequest:
+      type: object
+      additionalProperties: false
+      required: [name, gpu_model, gpus, gpu_mem_gb, runtimes]
+      properties:
+        name: { type: string }
+        gpu_model: { type: string }
+        gpus: { type: integer, minimum: 1, maximum: 64 }
+        gpu_mem_gb: { type: integer, minimum: 0 }
+        runtimes: { type: array, items: { type: string, enum: [sim, kubernetes] } }
+    RegisterWorkerResult:
+      type: object
+      additionalProperties: false
+      required: [worker_id, pool_id, token]
+      properties:
+        worker_id: { type: string }
+        pool_id: { type: string }
+        token: { type: string }
+    HeartbeatRequest:
+      type: object
+      additionalProperties: false
+      required: [state, held]
+      properties:
+        state: { type: string, enum: [READY, DRAINING] }
+        held: { type: array, items: { type: string }, maxItems: 256 }
+    StopOrder:
+      type: object
+      additionalProperties: false
+      required: [attempt_id, kind]
+      properties:
+        attempt_id: { type: string }
+        kind: { type: string, enum: [cancel, preempt, timeout] }
+    HeartbeatResult:
+      type: object
+      additionalProperties: false
+      required: [renewed, stop, abandon, lease_ttl_s]
+      properties:
+        renewed: { type: array, items: { type: string } }
+        stop: { type: array, items: { $ref: "#/components/schemas/StopOrder" } }
+        abandon: { type: array, items: { type: string } }
+        lease_ttl_s: { type: integer, format: int64 }
+    ClaimRequest:
+      type: object
+      additionalProperties: false
+      required: [max]
+      properties:
+        max: { type: integer, minimum: 0, maximum: 16 }
+    Dispatch:
+      type: object
+      additionalProperties: false
+      required: [attempt_id, job_id, worker_id, image, command, gpus, gpu_model, runtime, max_runtime_s, lease_expires, spec_digest, mac]
+      properties:
+        attempt_id: { type: string }
+        job_id: { type: string }
+        worker_id: { type: string }
+        image: { type: string }
+        command: { type: array, items: { type: string } }
+        gpus: { type: integer }
+        gpu_model: { type: string }
+        runtime: { type: string }
+        max_runtime_s: { type: integer, format: int64 }
+        lease_expires: { type: string, format: date-time }
+        spec_digest: { type: string }
+        mac: { type: string }
+    ClaimResponse:
+      type: object
+      additionalProperties: false
+      required: [dispatches]
+      properties:
+        dispatches: { type: array, items: { $ref: "#/components/schemas/Dispatch" } }
+    AckResponse:
+      type: object
+      additionalProperties: false
+      required: [action]
+      properties:
+        action: { type: string, enum: [run, cancel] }
+    WorkerEvent:
+      type: object
+      additionalProperties: false
+      required: [seq, kind, at]
+      properties:
+        seq: { type: integer, format: int64, minimum: 1 }
+        kind: { type: string, enum: [started, log, progress, exit] }
+        at: { type: string, format: date-time }
+        message: { type: string, maxLength: 16384 }
+        outcome: { type: string, enum: [SUCCEEDED, FAILED, LOST, PREEMPTED, CANCELLED, EXPIRED, TIMED_OUT] }
+        exit_code: { type: integer }
+    EventsRequest:
+      type: object
+      additionalProperties: false
+      required: [events]
+      properties:
+        events: { type: array, minItems: 1, maxItems: 500, items: { $ref: "#/components/schemas/WorkerEvent" } }
+    EventsResponse:
+      type: object
+      additionalProperties: false
+      required: [outcome]
+      properties:
+        outcome: { type: string }
+    UploadResponse:
+      type: object
+      additionalProperties: false
+      required: [offset]
+      properties:
+        offset: { type: integer, format: int64 }
+    CompleteArtifactRequest:
+      type: object
+      additionalProperties: false
+      required: [sha256]
+      properties:
+        sha256: { type: string, pattern: "^[a-f0-9]{64}$" }

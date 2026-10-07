@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GPU broker status</title>
+<style>
+  :root { --bg:#fff; --fg:#1b1d21; --muted:#5d6470; --line:#e3e6ea; --ok:#1d7a46; --warn:#a15c00; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#14161a; --fg:#e6e8eb; --muted:#9aa1ab; --line:#2a2e35; --ok:#5fd394; --warn:#f0b35a; } }
+  body { background:var(--bg); color:var(--fg); font:15px/1.5 system-ui, sans-serif; margin:0 auto; max-width:960px; padding:16px; }
+  table { border-collapse:collapse; width:100%; } td,th { border-bottom:1px solid var(--line); padding:6px 8px; text-align:left; }
+  th { color:var(--muted); font-weight:500; } .muted { color:var(--muted); font-size:13px; } .ok { color:var(--ok); } .warn { color:var(--warn); }
+  .wrap { overflow-x:auto; }
+</style>
+</head>
+<body>
+<h1>GPU broker status</h1>
+<p class="muted">Generated {{.GeneratedAt.Format "2006-01-02 15:04 UTC"}}. {{.Evidence}}</p>
+<p>Queued jobs: <strong>{{.Queue.QueuedJobs}}</strong> <span class="muted">(pilot {{num .Queue.QueuedPilot}}, real {{num .Queue.QueuedReal}})</span></p>
+<div class="wrap"><table>
+<tr><th>Pool</th><th>Region</th><th>Workers</th><th>GPUs in use</th><th>Utilization</th><th>Heartbeat</th><th>Succeeded 7d</th><th>Failed 7d</th></tr>
+{{range .Pools}}<tr>
+<td>{{.Pool}}</td><td>{{.Region}}</td><td>{{.WorkersReady}}</td><td>{{.GPUsReserved}} / {{.GPUsTotal}}</td><td>{{pct .Utilization}}</td>
+<td>{{if .HeartbeatFresh}}<span class="ok">fresh</span>{{else}}<span class="warn">stale</span>{{end}}</td>
+<td>{{if .Outcomes7d}}{{.Outcomes7d.Succeeded}}{{else}}withheld{{end}}</td><td>{{if .Outcomes7d}}{{.Outcomes7d.Failed}}{{else}}withheld{{end}}</td>
+</tr>{{end}}
+</table></div>
+<p class="muted">Machine-readable: <a href="/status.json">/status.json</a>. No usernames, job ids, commands, images or hostnames are published.</p>
+</body>
+</html>

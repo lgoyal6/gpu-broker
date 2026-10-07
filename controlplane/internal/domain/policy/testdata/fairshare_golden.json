@@ -1,0 +1,388 @@
+{
+ "source": "gpu_broker.fairshare.priority_of",
+ "config": {
+  "w_fair": 0.5,
+  "w_age": 0.5,
+  "age_max_hours": 12.0
+ },
+ "cases": [
+  {
+   "share": 0.0,
+   "wait_minutes": 0,
+   "score": 0.5,
+   "fair_term": 0.5,
+   "age_term": 0.0
+  },
+  {
+   "share": 0.0,
+   "wait_minutes": 1,
+   "score": 0.500694444,
+   "fair_term": 0.5,
+   "age_term": 0.000694444
+  },
+  {
+   "share": 0.0,
+   "wait_minutes": 30,
+   "score": 0.520833333,
+   "fair_term": 0.5,
+   "age_term": 0.020833333
+  },
+  {
+   "share": 0.0,
+   "wait_minutes": 90,
+   "score": 0.5625,
+   "fair_term": 0.5,
+   "age_term": 0.0625
+  },
+  {
+   "share": 0.0,
+   "wait_minutes": 360,
+   "score": 0.75,
+   "fair_term": 0.5,
+   "age_term": 0.25
+  },
+  {
+   "share": 0.0,
+   "wait_minutes": 719,
+   "score": 0.999305556,
+   "fair_term": 0.5,
+   "age_term": 0.499305556
+  },
+  {
+   "share": 0.0,
+   "wait_minutes": 720,
+   "score": 1.0,
+   "fair_term": 0.5,
+   "age_term": 0.5
+  },
+  {
+   "share": 0.0,
+   "wait_minutes": 721,
+   "score": 1.0,
+   "fair_term": 0.5,
+   "age_term": 0.5
+  },
+  {
+   "share": 0.0,
+   "wait_minutes": 2880,
+   "score": 1.0,
+   "fair_term": 0.5,
+   "age_term": 0.5
+  },
+  {
+   "share": 0.05,
+   "wait_minutes": 0,
+   "score": 0.475,
+   "fair_term": 0.475,
+   "age_term": 0.0
+  },
+  {
+   "share": 0.05,
+   "wait_minutes": 1,
+   "score": 0.475694444,
+   "fair_term": 0.475,
+   "age_term": 0.000694444
+  },
+  {
+   "share": 0.05,
+   "wait_minutes": 30,
+   "score": 0.495833333,
+   "fair_term": 0.475,
+   "age_term": 0.020833333
+  },
+  {
+   "share": 0.05,
+   "wait_minutes": 90,
+   "score": 0.5375,
+   "fair_term": 0.475,
+   "age_term": 0.0625
+  },
+  {
+   "share": 0.05,
+   "wait_minutes": 360,
+   "score": 0.725,
+   "fair_term": 0.475,
+   "age_term": 0.25
+  },
+  {
+   "share": 0.05,
+   "wait_minutes": 719,
+   "score": 0.974305556,
+   "fair_term": 0.475,
+   "age_term": 0.499305556
+  },
+  {
+   "share": 0.05,
+   "wait_minutes": 720,
+   "score": 0.975,
+   "fair_term": 0.475,
+   "age_term": 0.5
+  },
+  {
+   "share": 0.05,
+   "wait_minutes": 721,
+   "score": 0.975,
+   "fair_term": 0.475,
+   "age_term": 0.5
+  },
+  {
+   "share": 0.05,
+   "wait_minutes": 2880,
+   "score": 0.975,
+   "fair_term": 0.475,
+   "age_term": 0.5
+  },
+  {
+   "share": 0.25,
+   "wait_minutes": 0,
+   "score": 0.375,
+   "fair_term": 0.375,
+   "age_term": 0.0
+  },
+  {
+   "share": 0.25,
+   "wait_minutes": 1,
+   "score": 0.375694444,
+   "fair_term": 0.375,
+   "age_term": 0.000694444
+  },
+  {
+   "share": 0.25,
+   "wait_minutes": 30,
+   "score": 0.395833333,
+   "fair_term": 0.375,
+   "age_term": 0.020833333
+  },
+  {
+   "share": 0.25,
+   "wait_minutes": 90,
+   "score": 0.4375,
+   "fair_term": 0.375,
+   "age_term": 0.0625
+  },
+  {
+   "share": 0.25,
+   "wait_minutes": 360,
+   "score": 0.625,
+   "fair_term": 0.375,
+   "age_term": 0.25
+  },
+  {
+   "share": 0.25,
+   "wait_minutes": 719,
+   "score": 0.874305556,
+   "fair_term": 0.375,
+   "age_term": 0.499305556
+  },
+  {
+   "share": 0.25,
+   "wait_minutes": 720,
+   "score": 0.875,
+   "fair_term": 0.375,
+   "age_term": 0.5
+  },
+  {
+   "share": 0.25,
+   "wait_minutes": 721,
+   "score": 0.875,
+   "fair_term": 0.375,
+   "age_term": 0.5
+  },
+  {
+   "share": 0.25,
+   "wait_minutes": 2880,
+   "score": 0.875,
+   "fair_term": 0.375,
+   "age_term": 0.5
+  },
+  {
+   "share": 0.5,
+   "wait_minutes": 0,
+   "score": 0.25,
+   "fair_term": 0.25,
+   "age_term": 0.0
+  },
+  {
+   "share": 0.5,
+   "wait_minutes": 1,
+   "score": 0.250694444,
+   "fair_term": 0.25,
+   "age_term": 0.000694444
+  },
+  {
+   "share": 0.5,
+   "wait_minutes": 30,
+   "score": 0.270833333,
+   "fair_term": 0.25,
+   "age_term": 0.020833333
+  },
+  {
+   "share": 0.5,
+   "wait_minutes": 90,
+   "score": 0.3125,
+   "fair_term": 0.25,
+   "age_term": 0.0625
+  },
+  {
+   "share": 0.5,
+   "wait_minutes": 360,
+   "score": 0.5,
+   "fair_term": 0.25,
+   "age_term": 0.25
+  },
+  {
+   "share": 0.5,
+   "wait_minutes": 719,
+   "score": 0.749305556,
+   "fair_term": 0.25,
+   "age_term": 0.499305556
+  },
+  {
+   "share": 0.5,
+   "wait_minutes": 720,
+   "score": 0.75,
+   "fair_term": 0.25,
+   "age_term": 0.5
+  },
+  {
+   "share": 0.5,
+   "wait_minutes": 721,
+   "score": 0.75,
+   "fair_term": 0.25,
+   "age_term": 0.5
+  },
+  {
+   "share": 0.5,
+   "wait_minutes": 2880,
+   "score": 0.75,
+   "fair_term": 0.25,
+   "age_term": 0.5
+  },
+  {
+   "share": 0.75,
+   "wait_minutes": 0,
+   "score": 0.125,
+   "fair_term": 0.125,
+   "age_term": 0.0
+  },
+  {
+   "share": 0.75,
+   "wait_minutes": 1,
+   "score": 0.125694444,
+   "fair_term": 0.125,
+   "age_term": 0.000694444
+  },
+  {
+   "share": 0.75,
+   "wait_minutes": 30,
+   "score": 0.145833333,
+   "fair_term": 0.125,
+   "age_term": 0.020833333
+  },
+  {
+   "share": 0.75,
+   "wait_minutes": 90,
+   "score": 0.1875,
+   "fair_term": 0.125,
+   "age_term": 0.0625
+  },
+  {
+   "share": 0.75,
+   "wait_minutes": 360,
+   "score": 0.375,
+   "fair_term": 0.125,
+   "age_term": 0.25
+  },
+  {
+   "share": 0.75,
+   "wait_minutes": 719,
+   "score": 0.624305556,
+   "fair_term": 0.125,
+   "age_term": 0.499305556
+  },
+  {
+   "share": 0.75,
+   "wait_minutes": 720,
+   "score": 0.625,
+   "fair_term": 0.125,
+   "age_term": 0.5
+  },
+  {
+   "share": 0.75,
+   "wait_minutes": 721,
+   "score": 0.625,
+   "fair_term": 0.125,
+   "age_term": 0.5
+  },
+  {
+   "share": 0.75,
+   "wait_minutes": 2880,
+   "score": 0.625,
+   "fair_term": 0.125,
+   "age_term": 0.5
+  },
+  {
+   "share": 1.0,
+   "wait_minutes": 0,
+   "score": 0.0,
+   "fair_term": 0.0,
+   "age_term": 0.0
+  },
+  {
+   "share": 1.0,
+   "wait_minutes": 1,
+   "score": 0.000694444,
+   "fair_term": 0.0,
+   "age_term": 0.000694444
+  },
+  {
+   "share": 1.0,
+   "wait_minutes": 30,
+   "score": 0.020833333,
+   "fair_term": 0.0,
+   "age_term": 0.020833333
+  },
+  {
+   "share": 1.0,
+   "wait_minutes": 90,
+   "score": 0.0625,
+   "fair_term": 0.0,
+   "age_term": 0.0625
+  },
+  {
+   "share": 1.0,
+   "wait_minutes": 360,
+   "score": 0.25,
+   "fair_term": 0.0,
+   "age_term": 0.25
+  },
+  {
+   "share": 1.0,
+   "wait_minutes": 719,
+   "score": 0.499305556,
+   "fair_term": 0.0,
+   "age_term": 0.499305556
+  },
+  {
+   "share": 1.0,
+   "wait_minutes": 720,
+   "score": 0.5,
+   "fair_term": 0.0,
+   "age_term": 0.5
+  },
+  {
+   "share": 1.0,
+   "wait_minutes": 721,
+   "score": 0.5,
+   "fair_term": 0.0,
+   "age_term": 0.5
+  },
+  {
+   "share": 1.0,
+   "wait_minutes": 2880,
+   "score": 0.5,
+   "fair_term": 0.0,
+   "age_term": 0.5
+  }
+ ]
+}
