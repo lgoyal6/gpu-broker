@@ -49,7 +49,7 @@ groups:
           summary: Dispatch events are not being claimed by workers
           runbook_url: https://github.com/lgoyal6/gpu-broker/blob/main/docs/runbooks/queue-outage.md
       - alert: GpubNoSchedulerLeader
-        expr: sum(gpub_scheduler_is_leader) == 0
+        expr: sum(gpub_scheduler_is_leader) == 0 or absent(gpub_scheduler_is_leader)
         for: 2m
         labels: { severity: page }
         annotations:
@@ -104,3 +104,10 @@ groups:
         annotations:
           summary: "Project {{ $labels.project }} has under $5 of budget left"
           runbook_url: https://github.com/lgoyal6/gpu-broker/blob/main/docs/runbooks/capacity-exhaustion.md
+      - alert: GpubStateRefreshStalled
+        expr: time() - max(gpub_state_refresh_timestamp_seconds) > 60 or absent(gpub_state_refresh_timestamp_seconds)
+        for: 2m
+        labels: { severity: page }
+        annotations:
+          summary: Reconciler state gauges have not refreshed for over a minute
+          runbook_url: https://github.com/lgoyal6/gpu-broker/blob/main/docs/runbooks/database-outage.md

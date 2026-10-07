@@ -47,6 +47,7 @@ type Metrics struct {
 	carbonAge     *prometheus.GaugeVec
 	statusAge     prometheus.Gauge
 	storeUp       prometheus.Gauge
+	lastRefresh   prometheus.Gauge
 }
 
 func New() *Metrics {
@@ -107,7 +108,8 @@ func New() *Metrics {
 		Help: "Age of the public status snapshot being served."})
 	m.storeUp = prometheus.NewGauge(prometheus.GaugeOpts{Name: "gpub_store_up",
 		Help: "1 when the reconciler's last database read succeeded."})
-	for _, c := range []prometheus.Collector{m.storeUp, m.transitions, m.decisions, m.fallbacks, m.tickSeconds, m.decisionSecs,
+	m.lastRefresh = prometheus.NewGauge(prometheus.GaugeOpts{Name: "gpub_state_refresh_timestamp_seconds", Help: "Unix timestamp of the last successful reconciler gauge refresh."})
+	for _, c := range []prometheus.Collector{m.lastRefresh, m.storeUp, m.transitions, m.decisions, m.fallbacks, m.tickSeconds, m.decisionSecs,
 		m.conflicts, m.staleLeases, m.outcomes, m.stage, m.artifactFails, m.repairs, m.fenced, m.txRetries,
 		m.httpRequests, m.httpSeconds, m.carbonEffect, m.isLeader, m.queueDepth, m.poolGPUs, m.fragmentation,
 		m.heartbeatAge, m.outboxDepth, m.projectAvail, m.carbonAge, m.statusAge} {
@@ -188,6 +190,7 @@ func (m *Metrics) Collect(ctx context.Context, store application.Store, now time
 		m.storeUp.Set(0)
 	} else {
 		m.storeUp.Set(1)
+		m.lastRefresh.Set(float64(now.Unix()))
 	}
 	return err
 }
