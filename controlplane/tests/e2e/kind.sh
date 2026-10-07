@@ -69,7 +69,9 @@ port_forward() {
   fail "port-forward never became ready"
 }
 
-job_state() { "$BIN/gpuctl" status "$1" | head -1 | awk '{print $2}'; }
+# Consume the entire response so pipefail does not turn a successful CLI call
+# into SIGPIPE when status includes attempt details after its first line.
+job_state() { "$BIN/gpuctl" status "$1" | sed -n '1p' | awk '{print $2}'; }
 
 wait_state() { # job, wanted state, timeout seconds
   for _ in $(seq 1 "$3"); do
@@ -110,8 +112,8 @@ for _ in $(seq 1 60); do "$BIN/gpuctl" doctor >/dev/null 2>&1 && break; sleep 1;
 J1=$(submit 1 sh -c 'echo hello-from-attempt; sleep 3; echo done')
 t0=$(now_ms)
 wait_state "$J1" SUCCEEDED 120
-"$BIN/gpuctl" logs "$J1" | grep -q hello-from-attempt || fail "attempt log line missing"
-"$BIN/gpuctl" policy explain "$J1" | head -8
+"$BIN/gpuctl" logs "$J1" | grep hello-from-attempt >/dev/null || fail "attempt log line missing"
+"$BIN/gpuctl" policy explain "$J1" | sed -n '1,8p'
 record "{\"step\":\"real_container_job\",\"job_ms\":$(( $(now_ms) - t0 ))}"
 kubectl -n gpub-jobs get pods -o jsonpath='{.items[0].spec.securityContext.runAsNonRoot}{" "}{.items[0].spec.automountServiceAccountToken}' | grep -q 'true false' \
   || fail "attempt pod is not running with the isolation boundary"
@@ -159,7 +161,7 @@ kubectl -n "$NS" delete pod "$agent" --wait=false
 kubectl -n "$NS" delete pod -l app.kubernetes.io/component=api --wait=false
 sleep 5; port_forward
 wait_state "$J3" SUCCEEDED 120
-attempts=$("$BIN/gpuctl" status "$J3" | head -1 | grep -o 'attempt=[0-9]*/' | tr -dc 0-9)
+attempts=$("$BIN/gpuctl" status "$J3" | sed -n '1p' | grep -o 'attempt=[0-9]*/' | tr -dc 0-9)
 [[ "$attempts" == 1 ]] || fail "agent restart caused a retry (attempt $attempts); it should re-adopt the running Job"
 record "{\"step\":\"pod_restart\",\"node\":\"$node\",\"attempts\":$attempts}"
 
@@ -174,7 +176,7 @@ drain_recovery_ms=$(( $(now_ms) - t0 ))
 summary=$("$BIN/gpuctl" status "$J4")
 echo "$summary"
 echo "$summary" | grep -q 'LOST' || fail "drained attempt was not recorded as LOST"
-attempts=$(echo "$summary" | head -1 | grep -o 'attempt=[0-9]*/' | tr -dc 0-9)
+attempts=$(echo "$summary" | sed -n '1p' | grep -o 'attempt=[0-9]*/' | tr -dc 0-9)
 [[ "$attempts" == 2 ]] || fail "expected the retry to be attempt 2, got $attempts"
 "$BIN/gpuctl" pools
 kubectl uncordon "$node"
