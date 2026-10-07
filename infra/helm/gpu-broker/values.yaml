@@ -1,0 +1,142 @@
+# Defaults are production-shaped: no bundled database, no demo endpoints,
+# no fixture carbon. values-kind.yaml and values-gpu.yaml are the two profiles.
+
+image:
+  repository: gpubroker
+  tag: dev
+  # Set a digest in production; it takes precedence over the tag.
+  digest: ""
+  pullPolicy: IfNotPresent
+
+# Namespace where attempt Jobs run. It is created by the chart and gets a
+# default-deny NetworkPolicy; only the worker agent can create Jobs in it.
+jobsNamespace: gpub-jobs
+
+database:
+  # Secret with keys: url (owner role), status-url (gpub_status login),
+  # status-password. Required when postgresql.enabled=false.
+  existingSecret: ""
+
+secrets:
+  # Secret with keys: dispatch-key (>=32 bytes) and one bootstrap token per
+  # pool (key = pool id). Generated on first install when empty; an
+  # ExternalSecret can provide it instead (externalSecrets below).
+  existingSecret: ""
+
+externalSecrets:
+  enabled: false
+  secretStoreRef: { name: "", kind: ClusterSecretStore }
+  # remote keys for the dispatch key and per-pool bootstrap tokens
+  dispatchKey: ""
+  bootstrapTokens: {}   # poolId: remoteKey
+  database: ""          # remote key holding url/status-url/status-password
+
+# Bundled PostgreSQL: local and Kind only. Production uses a managed database
+# through database.existingSecret.
+postgresql:
+  enabled: false
+  image: postgres:16.6-alpine@sha256:1d04b9ba1d4996401f2552b51beda8187f175c0645c091e4781134fc9c9a3eef
+  storage: 2Gi
+  password: ""   # generated when empty
+
+# Where api, scheduler, reconciler, status, migrations and the bundled
+# database run. Keep them off GPU nodes so draining a GPU node never takes
+# the control plane with it.
+controlPlane:
+  nodeSelector: {}
+  tolerations: []
+
+pools:
+  - id: gpu-a100
+    name: gpu-a100
+    kind: kubernetes
+    region: gb-london
+    priceUsd: 2.40
+    interruptible: false
+    pue: 1.2
+
+api:
+  replicas: 2
+  demo: false
+  objectStorage:
+    # Artifacts and logs. RWX lets every API replica serve every artifact;
+    # with RWO keep replicas: 1 or use an S3 adapter (not shipped).
+    size: 5Gi
+    accessMode: ReadWriteOnce
+    storageClass: ""
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { cpu: "1", memory: 512Mi }
+
+scheduler:
+  replicas: 2          # one leader, one hot standby (ADR 0004)
+  interval: 2s
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { cpu: "1", memory: 512Mi }
+
+reconciler:
+  replicas: 1
+  interval: 10s
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { cpu: 500m, memory: 256Mi }
+
+status:
+  replicas: 2
+  cacheTTL: 5s
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { cpu: 500m, memory: 128Mi }
+
+agent:
+  pool: gpu-a100
+  runtime: kubernetes
+  gpuModel: a100
+  gpusPerNode: 8
+  gpuMemGb: 80
+  # Extended resource each attempt requests. Empty means GPUs are declared
+  # (Kind), not requested from the device plugin.
+  gpuResource: nvidia.com/gpu
+  nodeSelector:
+    gpub.dev/pool: gpu-a100
+  tolerations:
+    - { key: nvidia.com/gpu, operator: Exists, effect: NoSchedule }
+  attemptCPU: "4"
+  attemptMemory: 32Gi
+  heartbeat: 10s
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { cpu: 500m, memory: 256Mi }
+
+jobs:
+  # Egress for attempt pods. Default deny except DNS; add CIDRs your
+  # training jobs must reach (artifact stores, package mirrors).
+  allowEgressCIDRs: []
+
+carbon:
+  # Kind/demo only: load the committed GB dataset shifted to end now and
+  # labelled replay:<dataset>. Production needs a live provider (see
+  # docs/evidence/gaps.md); without one, EcoShift falls back explicitly.
+  fixtureReplay: false
+  map: "gb-london=gb-london,gb-north-scotland=gb-north-scotland,gb-west-midlands=gb-west-midlands"
+
+monitoring:
+  # ServiceMonitor and PrometheusRule are rendered only when the Prometheus
+  # Operator CRDs exist, regardless of this flag.
+  enabled: true
+  dashboards: true
+
+# Extra annotations on control-plane pods (changing one forces a rollout).
+podAnnotations: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile: { type: RuntimeDefault }
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities: { drop: [ALL] }

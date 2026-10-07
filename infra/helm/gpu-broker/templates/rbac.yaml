@@ -1,0 +1,57 @@
+{{- range $c := list "api" "scheduler" "reconciler" "status" "migrate" "agent" }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $.Release.Name }}-{{ $c }}
+  labels: {{- include "gb.labels" $ | nindent 4 }}
+# Only the agent talks to the Kubernetes API; every other role gets no token.
+automountServiceAccountToken: {{ eq $c "agent" }}
+---
+{{- end }}
+# The agent may manage attempt Jobs and read their pods and logs, in the jobs
+# namespace only.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Release.Name }}-agent
+  namespace: {{ .Values.jobsNamespace }}
+  labels: {{- include "gb.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Release.Name }}-agent
+  namespace: {{ .Values.jobsNamespace }}
+  labels: {{- include "gb.labels" . | nindent 4 }}
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: {{ .Release.Name }}-agent }
+subjects:
+  - { kind: ServiceAccount, name: {{ .Release.Name }}-agent, namespace: {{ .Release.Namespace }} }
+---
+# Reading Nodes lets the agent notice its node is cordoned (drain) and stop
+# taking work. Nodes are cluster-scoped, so this cannot be namespaced; it is
+# read-only.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Release.Name }}-agent-nodes
+  labels: {{- include "gb.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ .Release.Name }}-agent-nodes
+  labels: {{- include "gb.labels" . | nindent 4 }}
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: {{ .Release.Name }}-agent-nodes }
+subjects:
+  - { kind: ServiceAccount, name: {{ .Release.Name }}-agent, namespace: {{ .Release.Namespace }} }

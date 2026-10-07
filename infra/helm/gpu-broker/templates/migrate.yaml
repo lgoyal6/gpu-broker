@@ -1,0 +1,93 @@
+{{- /*
+A plain Job named per revision, not a hook: helm --wait would otherwise wait
+for API readiness that depends on the migration. Roles wait for the schema
+themselves (cmd/gpubroker service()). Migrations are additive; a rollback
+runs the older binary against the newer schema and does not migrate down.
+*/ -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-pools
+  labels: {{- include "gb.labels" . | nindent 4 }}
+data:
+  pools.json: |
+    [
+    {{- range $i, $p := .Values.pools }}
+      {{- if $i }},{{ end }}
+      {"id": {{ $p.id | quote }}, "name": {{ $p.name | quote }}, "kind": {{ $p.kind | quote }}, "region": {{ $p.region | quote }},
+       "price_usd": {{ $p.priceUsd }}, "interruptible": {{ $p.interruptible }}, "pue": {{ $p.pue }},
+       "bootstrap_token_file": "/secrets/bootstrap-{{ $p.id }}"}
+    {{- end }}
+    ]
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-migrate-{{ .Release.Revision }}
+  labels: {{- include "gb.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migrate
+spec:
+  backoffLimit: 10
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels: {{- include "gb.labels" . | nindent 8 }}
+        app.kubernetes.io/component: migrate
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: {{ .Release.Name }}-migrate
+      {{- include "gb.podSecurity" . | nindent 6 }}
+      {{- include "gb.cpPlacement" . | nindent 6 }}
+      containers:
+        - name: migrate
+          image: {{ include "gb.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["migrate", "--metrics-addr=", "--status-login=gpub_status_login", "--status-password-file=/db/status-password",
+                 "--pool-config=/config/pools.json"]
+          env: {{- include "gb.dbEnv" . | nindent 12 }}
+          {{- include "gb.containerSecurity" . | nindent 10 }}
+          resources: { requests: { cpu: 50m, memory: 64Mi }, limits: { cpu: 500m, memory: 256Mi } }
+          volumeMounts:
+            - { name: secrets, mountPath: /secrets, readOnly: true }
+            - { name: config, mountPath: /config, readOnly: true }
+            - { name: db, mountPath: /db, readOnly: true }
+      volumes:
+        {{- include "gb.secretVolume" . | nindent 8 }}
+        - name: config
+          configMap: { name: {{ .Release.Name }}-pools }
+        - name: db
+          secret: { secretName: {{ include "gb.dbSecretName" . }}, items: [{ key: status-password, path: status-password }] }
+{{- if .Values.carbon.fixtureReplay }}
+---
+# Demo only: replayed historical carbon data, labelled replay:<dataset> on
+# every decision that uses it. Never enable this in production.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-carbon-replay-{{ .Release.Revision }}
+  labels: {{- include "gb.labels" . | nindent 4 }}
+    app.kubernetes.io/component: carbon-replay
+spec:
+  backoffLimit: 10
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels: {{- include "gb.labels" . | nindent 8 }}
+        app.kubernetes.io/component: migrate
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: {{ .Release.Name }}-migrate
+      {{- include "gb.podSecurity" . | nindent 6 }}
+      {{- include "gb.cpPlacement" . | nindent 6 }}
+      containers:
+        - name: load
+          image: {{ include "gb.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["admin", "load-carbon", "--replay-now", "--map={{ .Values.carbon.map }}"]
+          env: {{- include "gb.dbEnv" . | nindent 12 }}
+          {{- include "gb.containerSecurity" . | nindent 10 }}
+          resources: { requests: { cpu: 50m, memory: 64Mi }, limits: { cpu: 500m, memory: 256Mi } }
+          volumeMounts: [{ name: secrets, mountPath: /secrets, readOnly: true }]
+      volumes:
+        {{- include "gb.secretVolume" . | nindent 8 }}
+{{- end }}

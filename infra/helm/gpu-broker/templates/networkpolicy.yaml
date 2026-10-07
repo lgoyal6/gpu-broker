@@ -1,0 +1,77 @@
+# Default deny, then the edges the architecture needs. Enforcement depends on
+# the CNI (kindnet enforces NetworkPolicy since kind v0.24; Calico and Cilium
+# do; some managed CNIs need it enabled).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-default-deny
+  labels: {{- include "gb.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/instance: {{ .Release.Name }} }
+  policyTypes: [Ingress]
+---
+# The API and status page accept traffic from anywhere that can route to
+# them; the API authenticates every request, the status page is public.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-public-http
+  labels: {{- include "gb.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchExpressions:
+      - { key: app.kubernetes.io/instance, operator: In, values: [{{ .Release.Name }}] }
+      - { key: app.kubernetes.io/component, operator: In, values: [api, status] }
+  ingress:
+    - ports: [{ port: 8080 }, { port: 8081 }]
+---
+# Only control-plane roles reach the database.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-postgres
+  labels: {{- include "gb.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{- include "gb.selector" (dict "root" . "component" "postgres") | nindent 6 }}
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions:
+              - { key: app.kubernetes.io/instance, operator: In, values: [{{ .Release.Name }}] }
+              - { key: app.kubernetes.io/component, operator: In, values: [api, scheduler, reconciler, status, migrate] }
+      ports: [{ port: 5432 }]
+---
+# Metrics are scraped from any namespace labelled for monitoring.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-metrics
+  labels: {{- include "gb.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/instance: {{ .Release.Name }} }
+  ingress:
+    - from:
+        - namespaceSelector: { matchLabels: { gpub.dev/monitoring: "true" } }
+      ports: [{ port: 9090 }]
+---
+# Attempt pods: no ingress at all, egress to DNS plus configured CIDRs only.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: jobs-isolation
+  namespace: {{ .Values.jobsNamespace }}
+  labels: {{- include "gb.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+  egress:
+    - to:
+        - namespaceSelector: {}
+          podSelector: { matchLabels: { k8s-app: kube-dns } }
+      ports: [{ port: 53, protocol: UDP }, { port: 53, protocol: TCP }]
+    {{- range .Values.jobs.allowEgressCIDRs }}
+    - to: [{ ipBlock: { cidr: {{ . }} } }]
+    {{- end }}

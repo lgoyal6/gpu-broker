@@ -17,6 +17,16 @@ club members who have used the broker - see
 
 ![Fair share putting the heaviest user last, and a job caught holding a GPU six hours after its training script died - with the samples that justify it](docs/demo.gif)
 
+## Multi-pool control plane and EcoShift
+
+The Go control plane in [`controlplane/`](controlplane/) adds durable job
+attempts, capacity reservations, worker leases, tenant budgets, scheduling
+explanations, and cost/carbon policies. It runs beside the Python club broker.
+See the [control-plane guide](controlplane/README.md) for the simulator,
+deployment, tests, and limitations, and the [design](docs/CONTROL_PLANE.md)
+for concurrency and recovery mechanisms. Kind runs real containers with
+declared virtual GPU capacity; it does not validate GPU hardware or adoption.
+
 ## Why this exists
 
 I run the AWS Student Builder Club at UCSD. We share one credit pool. What

@@ -1,0 +1,106 @@
+# PrometheusRule spec. Also valid as a plain Prometheus rules file
+# (promtool check rules) once wrapped; scripts/check-alerts.sh does that in CI.
+# Every alert links its runbook under docs/runbooks/.
+groups:
+  - name: gpubroker.slo
+    rules:
+      - record: gpub:submit_availability:ratio_rate5m
+        expr: |
+          1 - (sum(rate(gpub_http_requests_total{route="POST /v1/jobs",code="5xx"}[5m]))
+               / clamp_min(sum(rate(gpub_http_requests_total{route="POST /v1/jobs"}[5m])), 1e-9))
+      - alert: GpubSubmitAvailabilityBurn
+        # SLO 99.5% over 30d; 14.4x burn over 1h pages.
+        expr: (1 - gpub:submit_availability:ratio_rate5m) > (14.4 * 0.005)
+        for: 5m
+        labels: { severity: page }
+        annotations:
+          summary: Job submission is failing faster than the 99.5% SLO allows
+          runbook_url: https://github.com/lgoyal6/gpu-broker/blob/main/docs/runbooks/database-outage.md
+      - alert: GpubDispatchLatencySLO
+        # SLO: 99% of reservations are claimed by their worker within 60s.
+        expr: histogram_quantile(0.99, sum by (le) (rate(gpub_job_stage_seconds_bucket{stage="reserve_to_dispatch"}[15m]))) > 60
+        for: 15m
+        labels: { severity: ticket }
+        annotations:
+          summary: p99 reserve-to-dispatch above 60s
+          runbook_url: https://github.com/lgoyal6/gpu-broker/blob/main/docs/runbooks/queue-outage.md
+      - alert: GpubStatusStale
+        # SLO: the public status snapshot is under 60s old.
+        expr: max(gpub_status_snapshot_age_seconds) > 60
+        for: 5m
+        labels: { severity: ticket }
+        annotations:
+          summary: Public status page is serving a stale snapshot
+          runbook_url: https://github.com/lgoyal6/gpu-broker/blob/main/docs/runbooks/database-outage.md
+  - name: gpubroker.components
+    rules:
+      - alert: GpubDatabaseOutage
+        expr: max(gpub_store_up) == 0 or absent(gpub_store_up)
+        for: 2m
+        labels: { severity: page }
+        annotations:
+          summary: The reconciler cannot read the database
+          runbook_url: https://github.com/lgoyal6/gpu-broker/blob/main/docs/runbooks/database-outage.md
+      - alert: GpubQueueBacklog
+        expr: sum(gpub_outbox_undelivered{topic="dispatch"}) > 20 and sum(gpub_pool_gpus{state="total"}) > 0
+        for: 10m
+        labels: { severity: page }
+        annotations:
+          summary: Dispatch events are not being claimed by workers
+          runbook_url: https://github.com/lgoyal6/gpu-broker/blob/main/docs/runbooks/queue-outage.md
+      - alert: GpubNoSchedulerLeader
+        expr: sum(gpub_scheduler_is_leader) == 0
+        for: 2m
+        labels: { severity: page }
+        annotations:
+          summary: No scheduler replica holds leadership
+          runbook_url: https://github.com/lgoyal6/gpu-broker/blob/main/docs/runbooks/scheduler-split-brain.md
+      - alert: GpubSchedulerSplitBrain
+        # Two replicas believe they lead, or a stale leader was fenced.
+        expr: sum(gpub_scheduler_is_leader) > 1 or increase(gpub_scheduler_fenced_total[10m]) > 0
+        for: 1m
+        labels: { severity: page }
+        annotations:
+          summary: More than one scheduler acted as leader
+          runbook_url: https://github.com/lgoyal6/gpu-broker/blob/main/docs/runbooks/scheduler-split-brain.md
+      - alert: GpubStaleWorker
+        expr: max by (pool, worker) (gpub_worker_heartbeat_age_seconds{state!="OFFLINE"}) > 60
+        for: 2m
+        labels: { severity: ticket }
+        annotations:
+          summary: "Worker {{ $labels.worker }} has not heartbeated for over a minute"
+          runbook_url: https://github.com/lgoyal6/gpu-broker/blob/main/docs/runbooks/stale-worker.md
+      - alert: GpubStuckJobs
+        expr: increase(gpub_stale_reclaims_total[15m]) > 5
+        labels: { severity: ticket }
+        annotations:
+          summary: The reconciler keeps reclaiming leases or reservations
+          runbook_url: https://github.com/lgoyal6/gpu-broker/blob/main/docs/runbooks/stuck-job.md
+      - alert: GpubStateRepaired
+        # Any repair means some code path leaked budget or capacity.
+        expr: increase(gpub_reconciler_repairs_total[1h]) > 0
+        labels: { severity: ticket }
+        annotations:
+          summary: "Reconciler repaired {{ $labels.kind }} state"
+          runbook_url: https://github.com/lgoyal6/gpu-broker/blob/main/docs/runbooks/stuck-job.md
+      - alert: GpubCarbonProviderOutage
+        expr: max(gpub_carbon_reading_age_seconds) > 7200 or increase(gpub_ecoshift_fallback_total{reason="carbon_stale"}[30m]) > 0
+        for: 10m
+        labels: { severity: ticket }
+        annotations:
+          summary: Carbon data is stale; EcoShift is running on its fallback policy
+          runbook_url: https://github.com/lgoyal6/gpu-broker/blob/main/docs/runbooks/provider-outage.md
+      - alert: GpubCapacityExhausted
+        expr: sum(gpub_pool_gpus{state="reserved"}) / clamp_min(sum(gpub_pool_gpus{state="total"}), 1) > 0.95 and sum(gpub_queue_depth) > 0
+        for: 30m
+        labels: { severity: ticket }
+        annotations:
+          summary: Pools are above 95% reserved with jobs waiting
+          runbook_url: https://github.com/lgoyal6/gpu-broker/blob/main/docs/runbooks/capacity-exhaustion.md
+      - alert: GpubBudgetLow
+        expr: min by (project) (gpub_project_available_usd) < 5
+        for: 15m
+        labels: { severity: info }
+        annotations:
+          summary: "Project {{ $labels.project }} has under $5 of budget left"
+          runbook_url: https://github.com/lgoyal6/gpu-broker/blob/main/docs/runbooks/capacity-exhaustion.md

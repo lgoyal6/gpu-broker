@@ -1,0 +1,29 @@
+# Real GPU profile. Not exercised by this repository (no GPU cluster); the
+# exact rollout and verification steps are in docs/runbooks/deploy-gpu.md.
+postgresql:
+  enabled: false
+database:
+  existingSecret: gpu-broker-db        # url, status-url, status-password
+image:
+  repository: ghcr.io/lgoyal6/gpubroker
+  tag: ""                              # use a digest:
+  digest: ""                           # sha256:... from the release workflow
+  pullPolicy: IfNotPresent
+pools:
+  - { id: gpu-a100, name: gpu-a100, kind: kubernetes, region: gb-london, priceUsd: 2.40, interruptible: false, pue: 1.2 }
+agent:
+  pool: gpu-a100
+  runtime: kubernetes
+  gpuModel: a100
+  gpusPerNode: 8
+  gpuMemGb: 80
+  gpuResource: nvidia.com/gpu
+  nodeSelector: { nvidia.com/gpu.present: "true", gpub.dev/pool: gpu-a100 }
+  tolerations:
+    - { key: nvidia.com/gpu, operator: Exists, effect: NoSchedule }
+  attemptCPU: "8"
+  attemptMemory: 64Gi
+api:
+  objectStorage: { size: 200Gi, accessMode: ReadWriteMany, storageClass: "" }
+carbon:
+  fixtureReplay: false

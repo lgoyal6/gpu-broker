@@ -1,0 +1,32 @@
+{{- if and .Values.monitoring.enabled (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1") }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ .Release.Name }}
+  labels: {{- include "gb.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels: { app.kubernetes.io/part-of: gpu-broker, app.kubernetes.io/instance: {{ .Release.Name }} }
+  endpoints:
+    - { port: metrics, interval: 15s }
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ .Release.Name }}
+  labels: {{- include "gb.labels" . | nindent 4 }}
+spec:
+{{ .Files.Get "alerts.yaml" | indent 2 }}
+{{- end }}
+{{- if .Values.monitoring.dashboards }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-dashboards
+  labels:
+    {{- include "gb.labels" . | nindent 4 }}
+    grafana_dashboard: "1"
+data:
+{{ (.Files.Glob "dashboards/*.json").AsConfig | indent 2 }}
+{{- end }}

@@ -1,0 +1,58 @@
+# One agent per GPU node. Attempts run as Jobs in the jobs namespace pinned
+# to the agent's node; the agent's own state is an emptyDir because the
+# Kubernetes API (Jobs labelled with the worker id) is what a restarted
+# agent recovers from, not local files.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ .Release.Name }}-agent
+  labels: {{- include "gb.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent
+spec:
+  selector:
+    matchLabels: {{- include "gb.selector" (dict "root" . "component" "agent") | nindent 6 }}
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate: { maxUnavailable: 1 }
+  template:
+    metadata:
+      labels: {{- include "gb.labels" . | nindent 8 }}
+        app.kubernetes.io/component: agent
+    spec:
+      serviceAccountName: {{ .Release.Name }}-agent
+      {{- include "gb.podSecurity" . | nindent 6 }}
+      nodeSelector: {{- toYaml .Values.agent.nodeSelector | nindent 8 }}
+      {{- with .Values.agent.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      terminationGracePeriodSeconds: 15
+      containers:
+        - name: agent
+          image: {{ include "gb.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - worker-agent
+            - --api-url=http://{{ .Release.Name }}-api:8080
+            - --bootstrap-token-file=/secrets/bootstrap-{{ .Values.agent.pool }}
+            - --dispatch-key-file=/secrets/dispatch-key
+            - --runtime={{ .Values.agent.runtime }}
+            - --gpu-model={{ .Values.agent.gpuModel }}
+            - --gpus={{ .Values.agent.gpusPerNode }}
+            - --gpu-mem-gb={{ .Values.agent.gpuMemGb }}
+            - --gpu-resource={{ .Values.agent.gpuResource }}
+            - --namespace={{ .Values.jobsNamespace }}
+            - --cpu={{ .Values.agent.attemptCPU }}
+            - --memory={{ .Values.agent.attemptMemory }}
+            - --heartbeat={{ .Values.agent.heartbeat }}
+            - --state-dir=/state
+          env:
+            - name: NODE_NAME
+              valueFrom: { fieldRef: { fieldPath: spec.nodeName } }
+          resources: {{- toYaml .Values.agent.resources | nindent 12 }}
+          {{- include "gb.containerSecurity" . | nindent 10 }}
+          volumeMounts:
+            - { name: secrets, mountPath: /secrets, readOnly: true }
+            - { name: state, mountPath: /state }
+      volumes:
+        {{- include "gb.secretVolume" . | nindent 8 }}
+        - { name: state, emptyDir: {} }
