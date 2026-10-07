@@ -1,0 +1,92 @@
+rule_files:
+  - ../../../infra/helm/gpu-broker/alerts.yaml
+evaluation_interval: 1m
+tests:
+  - name: healthy leader and fresh state
+    interval: 1m
+    input_series:
+      - series: 'gpub_scheduler_is_leader'
+        values: '1x10'
+      - series: 'gpub_state_refresh_timestamp_seconds'
+        values: '0+60x10'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: GpubNoSchedulerLeader
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: GpubStateRefreshStalled
+        exp_alerts: []
+  - name: missing scrape series
+    interval: 1m
+    input_series: []
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: GpubNoSchedulerLeader
+        exp_alerts:
+          - exp_labels: {severity: page}
+            exp_annotations:
+              summary: No scheduler replica holds leadership
+              runbook_url: https://github.com/lgoyal6/gpu-broker/blob/main/docs/runbooks/scheduler-split-brain.md
+      - eval_time: 3m
+        alertname: GpubStateRefreshStalled
+        exp_alerts:
+          - exp_labels: {severity: page}
+            exp_annotations:
+              summary: Reconciler state gauges have not refreshed for over a minute
+              runbook_url: https://github.com/lgoyal6/gpu-broker/blob/main/docs/runbooks/database-outage.md
+  - name: stalled state and zero leaders
+    interval: 1m
+    input_series:
+      - series: 'gpub_scheduler_is_leader'
+        values: '0x10'
+      - series: 'gpub_state_refresh_timestamp_seconds'
+        values: '0x10'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: GpubNoSchedulerLeader
+        exp_alerts: []
+      - eval_time: 1m
+        alertname: GpubStateRefreshStalled
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: GpubNoSchedulerLeader
+        exp_alerts:
+          - exp_labels: {severity: page}
+            exp_annotations:
+              summary: No scheduler replica holds leadership
+              runbook_url: https://github.com/lgoyal6/gpu-broker/blob/main/docs/runbooks/scheduler-split-brain.md
+      - eval_time: 4m
+        alertname: GpubStateRefreshStalled
+        exp_alerts:
+          - exp_labels: {severity: page}
+            exp_annotations:
+              summary: Reconciler state gauges have not refreshed for over a minute
+              runbook_url: https://github.com/lgoyal6/gpu-broker/blob/main/docs/runbooks/database-outage.md
+  - name: alerts resolve after recovery
+    interval: 1m
+    input_series:
+      - series: 'gpub_scheduler_is_leader'
+        values: '0x4 1x6'
+      - series: 'gpub_state_refresh_timestamp_seconds'
+        values: '0x4 300+60x6'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: GpubNoSchedulerLeader
+        exp_alerts:
+          - exp_labels: {severity: page}
+            exp_annotations:
+              summary: No scheduler replica holds leadership
+              runbook_url: https://github.com/lgoyal6/gpu-broker/blob/main/docs/runbooks/scheduler-split-brain.md
+      - eval_time: 4m
+        alertname: GpubStateRefreshStalled
+        exp_alerts:
+          - exp_labels: {severity: page}
+            exp_annotations:
+              summary: Reconciler state gauges have not refreshed for over a minute
+              runbook_url: https://github.com/lgoyal6/gpu-broker/blob/main/docs/runbooks/database-outage.md
+      - eval_time: 6m
+        alertname: GpubNoSchedulerLeader
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: GpubStateRefreshStalled
+        exp_alerts: []

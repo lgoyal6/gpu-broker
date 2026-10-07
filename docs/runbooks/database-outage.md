@@ -1,6 +1,6 @@
 # Database outage
 
-**Alerts:** GpubDatabaseOutage, GpubSubmitAvailabilityBurn, GpubStatusStale
+**Alerts:** GpubDatabaseOutage, GpubSubmitAvailabilityBurn, GpubStatusStale, GpubStateRefreshStalled
 
 ## What breaks, what does not
 
@@ -39,3 +39,9 @@ connection limit (`too many clients`), or credential rotation.
 If the outage was longer than an hour, check `gpub_reconciler_repairs_total`.
 A non-zero ledger or capacity repair means a transaction was cut in a way
 the code did not anticipate; file it with the reconciler log lines.
+
+## State refresh stops
+
+`gpub_state_refresh_timestamp_seconds` advances only after a successful database gauge refresh. A failed refresh sets `gpub_store_up=0` while preserving the last timestamp, so stale capacity gauges cannot look freshly collected. `GpubStateRefreshStalled` fires when that timestamp is older than 60 seconds for two minutes, or the series is absent. Check the reconciler process and scrape target as well as PostgreSQL connectivity. Do not treat retained capacity gauges as current while this alert is firing.
+
+Run `bash scripts/check-alerts.sh` to validate PromQL and the healthy, missing, stalled, and recovered alert cases without deploying a cluster.
