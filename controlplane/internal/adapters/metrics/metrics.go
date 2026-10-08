@@ -48,6 +48,8 @@ type Metrics struct {
 	statusAge     prometheus.Gauge
 	storeUp       prometheus.Gauge
 	lastRefresh   prometheus.Gauge
+	carbonRefresh *prometheus.CounterVec
+	carbonSuccess prometheus.Gauge
 }
 
 func New() *Metrics {
@@ -109,7 +111,9 @@ func New() *Metrics {
 	m.storeUp = prometheus.NewGauge(prometheus.GaugeOpts{Name: "gpub_store_up",
 		Help: "1 when the reconciler's last database read succeeded."})
 	m.lastRefresh = prometheus.NewGauge(prometheus.GaugeOpts{Name: "gpub_state_refresh_timestamp_seconds", Help: "Unix timestamp of the last successful reconciler gauge refresh."})
-	for _, c := range []prometheus.Collector{m.lastRefresh, m.storeUp, m.transitions, m.decisions, m.fallbacks, m.tickSeconds, m.decisionSecs,
+	m.carbonRefresh = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "gpub_carbon_refresh_total", Help: "Live carbon fetch and persistence attempts."}, []string{"result"})
+	m.carbonSuccess = prometheus.NewGauge(prometheus.GaugeOpts{Name: "gpub_carbon_refresh_success_timestamp_seconds", Help: "Unix timestamp of the last successfully persisted live carbon response."})
+	for _, c := range []prometheus.Collector{m.carbonRefresh, m.carbonSuccess, m.lastRefresh, m.storeUp, m.transitions, m.decisions, m.fallbacks, m.tickSeconds, m.decisionSecs,
 		m.conflicts, m.staleLeases, m.outcomes, m.stage, m.artifactFails, m.repairs, m.fenced, m.txRetries,
 		m.httpRequests, m.httpSeconds, m.carbonEffect, m.isLeader, m.queueDepth, m.poolGPUs, m.fragmentation,
 		m.heartbeatAge, m.outboxDepth, m.projectAvail, m.carbonAge, m.statusAge} {
@@ -176,6 +180,15 @@ func (m *Metrics) HTTP(route string, code int, d time.Duration) {
 	m.httpSeconds.WithLabelValues(route).Observe(d.Seconds())
 }
 func (m *Metrics) StatusAge(d time.Duration) { m.statusAge.Set(d.Seconds()) }
+
+func (m *Metrics) CarbonRefresh(ok bool) {
+	if ok {
+		m.carbonRefresh.WithLabelValues("success").Inc()
+		m.carbonSuccess.Set(float64(time.Now().Unix()))
+	} else {
+		m.carbonRefresh.WithLabelValues("failure").Inc()
+	}
+}
 
 func codeClass(c int) string {
 	return string(rune('0'+c/100)) + "xx"

@@ -113,6 +113,8 @@ agent:
   attemptCPU: "4"
   attemptMemory: 32Gi
   heartbeat: 10s
+  # Optional EC2 IMDSv2 interruption notices. Kind and non-EC2 nodes use none.
+  spotProvider: none
   resources:
     requests: { cpu: 50m, memory: 64Mi }
     limits: { cpu: 500m, memory: 256Mi }
@@ -123,9 +125,12 @@ jobs:
   allowEgressCIDRs: []
 
 carbon:
+  # Live GB regional estimates from the keyless public API. Unsupported
+  # regions still fall back; this never maps GB values to other countries.
+  live: false
+  interval: 5m
   # Kind/demo only: load the committed GB dataset shifted to end now and
-  # labelled replay:<dataset>. Production needs a live provider (see
-  # docs/evidence/gaps.md); without one, EcoShift falls back explicitly.
+  # labelled replay:<dataset>. Do not combine replay and live readings.
   fixtureReplay: false
   map: "gb-london=gb-london,gb-north-scotland=gb-north-scotland,gb-west-midlands=gb-west-midlands"
 

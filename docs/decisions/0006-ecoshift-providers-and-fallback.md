@@ -14,18 +14,28 @@ Implemented providers:
 - `fixture`: a versioned dataset file (`controlplane/data/carbon/*.json`) with a
   manifest carrying source URL, retrieval time, date range and SHA-256. The
   committed dataset comes from the GB National Grid ESO Carbon Intensity API
-  (keyless public API), retrieved by `scripts/fetch-carbon-fixture.sh`:
+  (keyless public API), retrieved by `scripts/fetch_carbon_fixture.py`:
   - national half-hourly **actual** intensity (observed) and ESO's own
     forecast, used for forecast evaluation;
   - regional half-hourly intensity, which ESO publishes as a **modelled
     estimate**, not a metered observation. Placement across regions uses it
     and decisions label it `source: eso-regional-estimate`.
 - `static-price`: per-pool prices from the pool definition (on-demand and spot).
+- `eso-live`: the same public provider's current `/regional` response, polled
+  by the reconciler independently of lease recovery. Regions 1, 8, and 13 map
+  to the existing GB pool region names. The interval start is the reading
+  timestamp; fetch time never makes an old reading fresh. Regional values
+  remain labelled `eso-regional-estimate`, including legitimate zero values.
+  The adapter rejects missing, duplicate, negative, stale, future, or malformed
+  readings before storing any of the response. Fetches have a ten-second
+  deadline and a bounded response size. Repeated polls upsert the same interval.
+  Failures preserve prior readings, which age into the existing fallback.
+  Enable with `carbon.live=true` in Helm or `reconciler --carbon-provider=eso`.
 
 A live commercial provider (WattTime, Electricity Maps) needs an API key this
 repository does not have. The interface and the staleness rules below are what
-such an adapter plugs into; it is listed as an external step in
-`docs/evidence/gaps.md`, not claimed.
+such an adapter plugs into. The public adapter covers GB only; mapping other
+cloud regions to GB would misrepresent their emissions and is not allowed.
 
 ## Energy model
 

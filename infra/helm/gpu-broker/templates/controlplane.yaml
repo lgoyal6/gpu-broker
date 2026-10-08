@@ -1,4 +1,7 @@
 {{- $root := . }}
+{{- if and .Values.carbon.live .Values.carbon.fixtureReplay }}
+{{- fail "carbon.live and carbon.fixtureReplay are mutually exclusive" }}
+{{- end }}
 {{- range $c := list "api" "scheduler" "reconciler" "status" }}
 {{- $v := index $.Values $c }}
 apiVersion: apps/v1
@@ -67,7 +70,13 @@ spec:
           {{- else if eq $c "scheduler" }}
           args: ["scheduler", "--interval={{ $.Values.scheduler.interval }}"]
           {{- else if eq $c "reconciler" }}
-          args: ["reconciler", "--interval={{ $.Values.reconciler.interval }}"]
+          args:
+            - reconciler
+            - --interval={{ $.Values.reconciler.interval }}
+            {{- if $.Values.carbon.live }}
+            - --carbon-provider=eso
+            - --carbon-interval={{ $.Values.carbon.interval }}
+            {{- end }}
           {{- else }}
           args: ["status", "--addr=:8081", "--cache-ttl={{ $.Values.status.cacheTTL }}"]
           {{- end }}

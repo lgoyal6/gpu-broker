@@ -86,7 +86,7 @@ Offline:
   sim            deterministic policy simulator over named workloads
   replay         replay a club or control-plane trace through the policies
   forecast-eval  evaluate the carbon forecaster against baselines
-  admin          create-tenant | create-pool | load-carbon
+  admin          create-tenant | create-pool | load-carbon | refresh-carbon
 
 Run "gpubroker <role> -h" for flags.
 `)

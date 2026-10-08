@@ -45,6 +45,9 @@ spec:
             - --memory={{ .Values.agent.attemptMemory }}
             - --heartbeat={{ .Values.agent.heartbeat }}
             - --state-dir=/state
+            {{- if eq .Values.agent.spotProvider "aws" }}
+            - --spot-provider=aws
+            {{- end }}
           env:
             - name: NODE_NAME
               valueFrom: { fieldRef: { fieldPath: spec.nodeName } }

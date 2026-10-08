@@ -16,9 +16,22 @@ gpub_carbon_reading_age_seconds
 sum by (reason) (increase(gpub_ecoshift_fallback_total[1h]))
 ```
 
-This repository ships no live carbon provider (a commercial one needs an API
-key; see `docs/evidence/gaps.md`). In the Kind profile, carbon is replayed
-history and goes stale 2 h after the carbon-replay Job ran; rerun it:
+For live GB regions, enable `carbon.live=true` and leave `fixtureReplay=false`.
+The reconciler polls the public ESO API every five minutes. Check its logs for
+`carbon refresh failed`, outbound HTTPS/DNS, and these series:
+
+```promql
+increase(gpub_carbon_refresh_total{result="failure"}[30m])
+time() - gpub_carbon_refresh_success_timestamp_seconds
+```
+
+The success timestamp remains zero until the first response is persisted, so
+a provider that never starts is visible as well. The reading-age metric uses
+the provider's interval timestamp, not the fetch time. Unsupported regions
+need their own provider; never relabel GB data as another region.
+
+In the Kind profile, carbon is replayed history and goes stale 2 h after the
+carbon-replay Job ran; rerun it:
 
 ```bash
 kubectl -n gpub delete job -l app.kubernetes.io/component=carbon-replay

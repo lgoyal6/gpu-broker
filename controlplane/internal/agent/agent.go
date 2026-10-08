@@ -32,6 +32,11 @@ type Config struct {
 	DispatchKey    []byte
 	Heartbeat      time.Duration
 	MaxConcurrent  int
+	Interruption   InterruptionSource
+}
+
+type InterruptionSource interface {
+	Interrupted(context.Context, time.Time) (bool, error)
 }
 
 // Agent holds only what it can rebuild from its state directory and the
@@ -162,6 +167,41 @@ func (a *Agent) Run(ctx context.Context) error {
 // report, claim new work. Exposed so tests drive it deterministically.
 func (a *Agent) Step(ctx context.Context) error {
 	a.drain = a.rt.Draining(ctx)
+	marker := filepath.Join(a.cfg.StateDir, "interrupted")
+	_, markerErr := os.Stat(marker)
+	interrupted := markerErr == nil
+	if markerErr != nil && !errors.Is(markerErr, os.ErrNotExist) {
+		return markerErr
+	}
+	if !interrupted && a.cfg.Interruption != nil {
+		var err error
+		interrupted, err = a.cfg.Interruption.Interrupted(ctx, a.clock.Now())
+		if err != nil {
+			a.log.Warn("spot notice poll failed; retrying", "err", err)
+		}
+		if interrupted {
+			// Persist before stopping or heartbeating. A container restart
+			// must never clear a provider's instruction to leave the node.
+			f, err := os.OpenFile(marker, os.O_CREATE|os.O_WRONLY, 0o600)
+			if err != nil {
+				return err
+			}
+			err = f.Sync()
+			closeErr := f.Close()
+			if err != nil {
+				return err
+			}
+			if closeErr != nil {
+				return closeErr
+			}
+		}
+	}
+	if interrupted {
+		a.drain = true
+		for _, id := range a.held() {
+			a.stop(ctx, domain.AttemptID(id), domain.OutcomePreempted)
+		}
+	}
 	if err := a.heartbeat(ctx); err != nil {
 		return err
 	}
@@ -218,14 +258,15 @@ func (a *Agent) heartbeat(ctx context.Context) error {
 func (a *Agent) stop(ctx context.Context, id domain.AttemptID, o domain.AttemptOutcome) {
 	a.mu.Lock()
 	_, ok := a.running[id]
-	if ok {
-		a.stopped[id] = o
-	}
 	a.mu.Unlock()
 	if ok {
 		if err := a.rt.Stop(ctx, id, o); err != nil {
 			a.log.Warn("stop failed", "attempt", id, "err", err)
+			return
 		}
+		a.mu.Lock()
+		a.stopped[id] = o
+		a.mu.Unlock()
 	}
 }
 

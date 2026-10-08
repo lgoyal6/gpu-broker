@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"sort"
 	"strings"
@@ -260,6 +261,11 @@ func runAdmin(ctx context.Context, args []string) error {
 			loaded[to] = len(snaps)
 		}
 		return enc.Encode(map[string]any{"dataset": d.Manifest.Dataset, "replay": *replay, "loaded": loaded})
+	case "refresh-carbon":
+		if err := application.RefreshCarbon(ctx, store, carbon.ESO{Endpoint: carbon.ESOEndpoint, Client: &http.Client{}}, time.Now().UTC()); err != nil {
+			return err
+		}
+		return enc.Encode(map[string]any{"source": "eso-regional-estimate", "regions": 3})
 	case "leader":
 		epoch, holder, err := store.CurrentEpoch(ctx)
 		if err != nil {
