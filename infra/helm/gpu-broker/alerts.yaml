@@ -90,6 +90,15 @@ groups:
         annotations:
           summary: Carbon data is stale; EcoShift is running on its fallback policy
           runbook_url: https://github.com/lgoyal6/gpu-broker/blob/main/docs/runbooks/provider-outage.md
+      - alert: GpubLiveCarbonRefreshStalled
+        # Gate on actual polling attempts to ignore disabled live feeds.
+        # A zero success timestamp catches a feed that never starts.
+        expr: (time() - gpub_carbon_refresh_success_timestamp_seconds > 900) and on(instance) (sum by (instance) (gpub_carbon_refresh_total) > 0)
+        for: 5m
+        labels: { severity: ticket }
+        annotations:
+          summary: Live carbon feed has not persisted a response in over 15 minutes
+          runbook_url: https://github.com/lgoyal6/gpu-broker/blob/main/docs/runbooks/provider-outage.md
       - alert: GpubCapacityExhausted
         expr: sum(gpub_pool_gpus{state="reserved"}) / clamp_min(sum(gpub_pool_gpus{state="total"}), 1) > 0.95 and sum(gpub_queue_depth) > 0
         for: 30m

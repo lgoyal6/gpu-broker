@@ -98,12 +98,19 @@ go tool pprof /tmp/gpub-cpu.prof
   must already exist and stay private. `s3.allowHTTP` is only for an isolated
   local compatibility service. Existing filesystem objects are not migrated
   automatically.
-- Carbon data is a historical fixture. Production needs a live provider;
-  stale or missing data triggers an explicit fallback.
+- Carbon supports a historical fixture and live GB regional estimates from
+  the keyless ESO API. Enable `carbon.live=true` in Helm, or run
+  `gpubroker reconciler --carbon-provider=eso`. For a one-time refresh use
+  `gpubroker admin refresh-carbon`. Other regions still need a provider;
+  stale or missing data triggers an explicit fallback. GB readings are
+  modelled estimates, not metered emissions. Replay and live mode cannot
+  be enabled together in Helm.
 - Forecast evaluation includes a persistence baseline. A forecast must pass
   the trust gate before the scheduler may delay jobs on its predictions.
-- Spot interruption is simulated. Real provider interruption integration
-  remains to be validated.
+- Spot interruption is simulated offline and has an optional EC2 IMDSv2
+  adapter (`agent.spotProvider=aws`). It is intentionally not claimed as
+  validated on Kind; production requires EC2 metadata reachability and a
+  real termination-notice drill.
 - There is no measured production adoption or production SLO history for
   this new control plane.
 

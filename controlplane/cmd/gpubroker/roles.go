@@ -11,14 +11,20 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/feature/ec2/imds"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
+	"github.com/lgoyal6/gpu-broker/controlplane/internal/adapters/carbon"
 	"github.com/lgoyal6/gpu-broker/controlplane/internal/adapters/metrics"
 	"github.com/lgoyal6/gpu-broker/controlplane/internal/adapters/postgres"
+	"github.com/lgoyal6/gpu-broker/controlplane/internal/adapters/spot"
 	"github.com/lgoyal6/gpu-broker/controlplane/internal/agent"
 	"github.com/lgoyal6/gpu-broker/controlplane/internal/application"
 	"github.com/lgoyal6/gpu-broker/controlplane/internal/domain"
@@ -228,7 +234,15 @@ func runReconciler(ctx context.Context, args []string, log *slog.Logger) error {
 	var c common
 	c.bind(fs)
 	interval := fs.Duration("interval", 10*time.Second, "reconcile interval")
+	carbonProvider := fs.String("carbon-provider", "none", "none | eso (live GB regional estimates)")
+	carbonInterval := fs.Duration("carbon-interval", 5*time.Minute, "live carbon polling interval (at least one minute)")
 	_ = fs.Parse(args)
+	if *carbonProvider != "none" && *carbonProvider != "eso" {
+		return fmt.Errorf("unknown carbon provider %q", *carbonProvider)
+	}
+	if *interval <= 0 || *carbonInterval < time.Minute {
+		return fmt.Errorf("reconcile interval must be positive and carbon interval at least one minute")
+	}
 	m := metrics.New()
 	svc, store, err := service(ctx, c, m, nil)
 	if err != nil {
@@ -236,6 +250,17 @@ func runReconciler(ctx context.Context, args []string, log *slog.Logger) error {
 	}
 	defer store.Close()
 	serveMetrics(ctx, c.metricsAddr, m, log)
+	if *carbonProvider == "eso" {
+		// Provider latency must not block lease reclamation. Join the poller
+		// before closing its database connection during process shutdown.
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			pollCarbon(ctx, store, carbon.ESO{Endpoint: carbon.ESOEndpoint, Client: &http.Client{}}, *carbonInterval, m, log)
+		}()
+		defer wg.Wait()
+	}
 	t := time.NewTicker(*interval)
 	defer t.Stop()
 	for {
@@ -251,6 +276,23 @@ func runReconciler(ctx context.Context, args []string, log *slog.Logger) error {
 		select {
 		case <-ctx.Done():
 			return nil
+		case <-t.C:
+		}
+	}
+}
+
+func pollCarbon(ctx context.Context, store application.Store, source application.CarbonSource, interval time.Duration, m *metrics.Metrics, log *slog.Logger) {
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		err := application.RefreshCarbon(ctx, store, source, time.Now().UTC())
+		m.CarbonRefresh(err == nil)
+		if err != nil && ctx.Err() == nil {
+			log.Warn("carbon refresh failed; existing readings will age into fallback", "err", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
 		case <-t.C:
 		}
 	}
@@ -290,7 +332,16 @@ func runAgent(ctx context.Context, args []string, log *slog.Logger) error {
 	cpu := fs.String("cpu", "1", "per-attempt CPU limit")
 	memLimit := fs.String("memory", "1Gi", "per-attempt memory limit")
 	heartbeat := fs.Duration("heartbeat", 10*time.Second, "heartbeat interval (must be well under the 45s lease)")
+	spotProvider := fs.String("spot-provider", "none", "none | aws (EC2 IMDSv2 spot interruption notices)")
 	_ = fs.Parse(args)
+	var interruption agent.InterruptionSource
+	switch *spotProvider {
+	case "none":
+	case "aws":
+		interruption = spot.AWS{Client: imds.New(imds.Options{EnableFallback: aws.FalseTernary})}
+	default:
+		return fmt.Errorf("unknown spot provider %q", *spotProvider)
+	}
 	boot, err := readSecret(*bootFile, "GPUB_BOOTSTRAP_TOKEN")
 	if err != nil && !fileExists(*stateDir+"/worker-token") {
 		return err
@@ -325,7 +376,7 @@ func runAgent(ctx context.Context, args []string, log *slog.Logger) error {
 		return err
 	}
 	a, err := agent.New(agent.Config{APIURL: *apiURL, BootstrapToken: string(boot), Name: *name, GPUModel: *model, GPUs: *gpus,
-		GPUMemGB: *mem, StateDir: *stateDir, DispatchKey: key, Heartbeat: *heartbeat}, rt, clock, log)
+		GPUMemGB: *mem, StateDir: *stateDir, DispatchKey: key, Heartbeat: *heartbeat, Interruption: interruption}, rt, clock, log)
 	if err != nil {
 		return err
 	}
