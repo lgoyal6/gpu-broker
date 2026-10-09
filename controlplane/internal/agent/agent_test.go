@@ -1,10 +1,13 @@
 package agent_test
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -25,6 +28,12 @@ var quiet = slog.New(slog.NewTextHandler(io.Discard, nil))
 type flaky struct {
 	h    http.Handler
 	down atomic.Bool
+}
+
+type interruptionSource struct{ interrupted atomic.Bool }
+
+func (s *interruptionSource) Interrupted(context.Context, time.Time) (bool, error) {
+	return s.interrupted.Load(), nil
 }
 
 func (f *flaky) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -56,14 +65,48 @@ func newRig(t *testing.T) *rig {
 }
 
 func (r *rig) agent(t *testing.T, dir, name string, key []byte) *agent.Agent {
+	return r.agentWithSource(t, dir, name, key, nil)
+}
+
+func (r *rig) agentWithSource(t *testing.T, dir, name string, key []byte, source agent.InterruptionSource) *agent.Agent {
 	rt, err := agent.NewSimRuntime(dir+"/sim", r.e.Clock)
 	r.e.Must(err)
 	a, err := agent.New(agent.Config{APIURL: r.url, BootstrapToken: r.boot, Name: name, GPUModel: "a100", GPUs: 2, GPUMemGB: 80,
-		StateDir: dir, DispatchKey: key}, rt, r.e.Clock, quiet)
+		StateDir: dir, DispatchKey: key, Interruption: source}, rt, r.e.Clock, quiet)
 	r.e.Must(err)
 	r.e.Must(a.Register(r.e.Ctx))
 	r.e.Must(a.Recover(r.e.Ctx))
 	return a
+}
+
+func TestAgentPersistsSpotInterruptionAndDrains(t *testing.T) {
+	r := newRig(t)
+	source := &interruptionSource{}
+	dir := t.TempDir()
+	a := r.agentWithSource(t, dir, "node-1", testkit.DispatchKey, source)
+	id := r.submit(t, "sim duration=1h")
+	r.e.Tick()
+	r.e.Must(a.Step(r.e.Ctx)) // claim and start before the notice arrives
+	if st := r.state(t, id); st != domain.JobRunning {
+		t.Fatalf("before interruption: %s", st)
+	}
+	source.interrupted.Store(true)
+	r.e.Must(a.Step(r.e.Ctx)) // persist notice, stop work, and report PREEMPTED
+	if st := r.state(t, id); st != domain.JobQueued {
+		t.Fatalf("interrupted job was not requeued: %s", st)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "interrupted")); err != nil {
+		t.Fatalf("interruption marker: %v", err)
+	}
+
+	// The marker survives a process restart and prevents a new claim while the
+	// node is draining. This is the safety boundary for an EC2 termination
+	// notice: no replacement work may start on the node.
+	b := r.agent(t, dir, "node-1", testkit.DispatchKey)
+	r.e.Must(b.Step(r.e.Ctx))
+	if n := r.e.QueryInt(`SELECT count(*) FROM job_attempts WHERE acked_at IS NOT NULL`); n != 1 {
+		t.Fatalf("draining agent claimed replacement work: %d acknowledged attempts", n)
+	}
 }
 
 func (r *rig) submit(t *testing.T, cmd string) domain.JobID {
