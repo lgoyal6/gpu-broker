@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Annotated, Optional
@@ -184,7 +185,11 @@ def submit(
         ensure_user(broker, user_id)
         result = broker.submit(
             user_id=user_id,
-            command=" ".join(command),
+            # Preserve argument boundaries when the backend runs the stored
+            # command through a shell. Plain joining breaks commands such as
+            # `python -c 'print("ok")'` by exposing their parentheses to the
+            # shell parser.
+            command=shlex.join(command),
             gpu_type=gpu,
             hours=hours,
             budget=parsed_budget,

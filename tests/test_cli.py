@@ -69,6 +69,15 @@ def test_the_command_after_the_dashes_is_preserved_verbatim(home):
     assert "python train.py --epochs 10" in result.output.replace("…", "")
 
 
+def test_submit_preserves_shell_sensitive_argument_boundaries(home):
+    result = run(
+        "submit", "--gpu", "a10g", "--hours", "1", "--",
+        "python", "-c", 'print("gpu smoke")',
+    )
+    assert result.exit_code == 0, result.output
+    assert 'python -c \'print("gpu smoke")\'' in run("status").output
+
+
 def test_submitting_with_no_command_shows_the_exact_line_to_type(home):
     result = run("submit", "--gpu", "a10g", "--hours", "1")
     assert result.exit_code == 1
