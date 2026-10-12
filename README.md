@@ -382,9 +382,11 @@ tests/              808 tests across 39 files
   hours next to the good numbers so the trade is visible rather than assumed.
   Reverse `placement_order` or raise your own budget if the answer is that you
   should just launch instances yourself.
-- **Nothing here has run on real hardware.** No real EC2 instance, no real
-  A6000, no real spot interruption, no real `docker build`. The doubles are
-  good; the first deploy will still find things.
+- **The AWS path has one live hardware smoke.** A T4 `nvidia-smi` command ran
+  through EC2 and SSM on 2026-10-12; the exact evidence is in
+  [docs/evidence/aws-t4-smoke.md](docs/evidence/aws-t4-smoke.md). Multi-node
+  capacity, long-running training, spot interruption recovery on AWS, and the
+  shared lab A6000 still require separate runs.
 - **It cannot snapshot a process.** Checkpointing is a contract your training
   script participates in - a signal and a directory - not something done to it.
   A job that ignores the signal restarts from the beginning.
