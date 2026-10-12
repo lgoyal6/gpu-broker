@@ -22,6 +22,13 @@ gradle run --args='fixtures/events.jsonl /tmp/gpu-broker-analytics'
 The local fixture proves aggregation, partitioning, and schema validation. The
 `StorageTarget` contract accepts only `file`, `hdfs`, and bucket-qualified
 `s3a` roots before Hadoop is contacted, which makes cloud configuration errors
-explicit. This is URI validation, not a live cloud write. A real HDFS or S3A
-run, a rendered Tableau workbook, and production usage remain separate
-evidence gates.
+explicit. With `hadoop-aws` installed, the same aggregator can write to an
+S3A bucket using the active AWS credential chain:
+
+```sh
+gradle run --args='fixtures/events.jsonl s3a://BUCKET/gpu-broker/'
+```
+
+This proves a live S3A object-store round trip, not HDFS throughput or a
+rendered Tableau workbook. Tableau consumes the generated CSV or a Hyper
+extract; workbook rendering remains a separate access gate.
