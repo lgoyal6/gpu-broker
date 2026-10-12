@@ -62,6 +62,18 @@ def test_order_beats_registration_order(config, free, paid):
     assert choose(usd_job(), [free_a10g, paid], config).tier == "local"
 
 
+def test_multi_node_pool_skips_full_worker_and_uses_next_capacity(config, clock, state_dir):
+    """A full node does not hide usable capacity on a sibling node."""
+    first = FakeBackend("node-a", clock=clock, currency=Currency.USD,
+                        capacity={"a10g": 0}, tier="ondemand", state_path=state_dir / "a.json")
+    second = FakeBackend("node-b", clock=clock, currency=Currency.USD,
+                         capacity={"a10g": 2}, tier="ondemand", state_path=state_dir / "b.json")
+    result = choose(usd_job(), [first, second], config)
+    assert result.placed
+    assert result.backend.name == "node-b"
+    assert ("node-a", "no free a10g right now") in result.skipped
+
+
 def test_a_full_free_tier_falls_through_to_paid_immediately(config, paid, clock):
     """The chosen policy: take whatever is free right now, never wait for
     cheaper capacity. That trades money for latency on purpose."""
