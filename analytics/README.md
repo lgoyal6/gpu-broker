@@ -30,5 +30,13 @@ gradle run --args='fixtures/events.jsonl s3a://BUCKET/gpu-broker/'
 ```
 
 This proves a live S3A object-store round trip, not HDFS throughput or a
-rendered Tableau workbook. Tableau consumes the generated CSV or a Hyper
-extract; workbook rendering remains a separate access gate.
+rendered Tableau workbook. To create a Tableau Hyper extract from the CSV:
+
+```sh
+uv run --with tableauhyperapi python scripts/build_tableau_hyper.py \
+  /tmp/gpu-broker-analytics/tableau/gpu_broker_metrics.csv \
+  /tmp/gpu-broker-analytics/tableau/gpu_broker_metrics.hyper
+```
+
+The Hyper file is Tableau-readable and its row count is checked by the script.
+Desktop or Cloud workbook rendering remains a separate access gate.
