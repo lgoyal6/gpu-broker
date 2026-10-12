@@ -30,7 +30,16 @@ gradle run --args='fixtures/events.jsonl s3a://BUCKET/gpu-broker/'
 ```
 
 This proves a live S3A object-store round trip, not HDFS throughput or a
-rendered Tableau workbook. To create a Tableau Hyper extract from the CSV:
+rendered Tableau workbook. The test suite also starts a one-node Hadoop
+`MiniDFSCluster` and reads the generated CSV and Parquet back through
+`FileSystem`; this verifies the HDFS adapter path without claiming a
+multi-node cluster or throughput result:
+
+```sh
+gradle test --no-daemon --max-workers=1
+```
+
+To create a Tableau Hyper extract from the CSV:
 
 ```sh
 uv run --with tableauhyperapi python scripts/build_tableau_hyper.py \
