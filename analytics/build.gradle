@@ -1,0 +1,36 @@
+plugins {
+    id 'java'
+    id 'application'
+}
+
+group = 'io.lgoyal.gpubroker'
+version = '0.1.0'
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation 'org.apache.hadoop:hadoop-common:3.4.1'
+    implementation 'org.apache.parquet:parquet-avro:1.14.4'
+    implementation 'org.apache.avro:avro:1.11.4'
+    implementation 'com.fasterxml.jackson.core:jackson-databind:2.17.3'
+
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.11.4'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.11.4'
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+}
+
+tasks.withType(Test).configureEach {
+    useJUnitPlatform()
+    maxParallelForks = 1
+}
+
+application {
+    mainClass = 'io.lgoyal.gpubroker.analytics.MetricsAggregator'
+}
