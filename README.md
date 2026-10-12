@@ -27,6 +27,14 @@ deployment, tests, and limitations, and the [design](docs/CONTROL_PLANE.md)
 for concurrency and recovery mechanisms. Kind runs real containers with
 declared virtual GPU capacity; it does not validate GPU hardware or adoption.
 
+## Hadoop and Tableau analytics
+
+The separate [`analytics/`](analytics/) module aggregates broker audit exports
+through Hadoop `FileSystem` and Parquet Avro APIs. It writes Hive-style date and
+tenant partitions plus a Tableau-ready CSV containing queue wait, cost,
+utilization, and SLO miss rate. The fixture is locally verified; HDFS/S3A,
+rendered Tableau workbooks, and production usage remain separate evidence gates.
+
 ## Why this exists
 
 I run the AWS Student Builder Club at UCSD. We share one credit pool. What

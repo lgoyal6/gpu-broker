@@ -1,0 +1,3 @@
+{"timestamp_ms":1791763200000,"tenant":"alpha","instance_type":"g4dn.xlarge","queue_wait_ms":12,"cost_usd":0.01,"utilization":0.73,"slo_met":true}
+{"timestamp_ms":1791763205000,"tenant":"alpha","instance_type":"g4dn.xlarge","queue_wait_ms":31,"cost_usd":0.02,"utilization":0.61,"slo_met":false}
+{"timestamp_ms":1791763260000,"tenant":"beta","instance_type":"g5.xlarge","queue_wait_ms":4,"cost_usd":0.03,"utilization":0.92,"slo_met":true}
