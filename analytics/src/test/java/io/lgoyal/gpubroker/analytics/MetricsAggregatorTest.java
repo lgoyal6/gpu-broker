@@ -102,4 +102,52 @@ class MetricsAggregatorTest {
             }
         }
     }
+
+    @Test
+    void keepsReplicatedOutputsReadableAfterDataNodeFailure() throws Exception {
+        Configuration configuration = new Configuration();
+        configuration.set("dfs.replication", "2");
+        configuration.setBoolean("dfs.permissions", false);
+        configuration.setBoolean("dfs.client.use.datanode.hostname", false);
+        configuration.set("hadoop.security.authentication", "simple");
+        configuration.set("hadoop.tmp.dir", Files.createTempDirectory("gpu-broker-minidfs-ha-").toString());
+
+        try (MiniDFSCluster cluster = new MiniDFSCluster.Builder(configuration)
+                .numDataNodes(2)
+                .format(true)
+                .build()) {
+            cluster.waitClusterUp();
+            Configuration clientConfiguration = cluster.getConfiguration(0);
+            Path outputRoot = new Path(cluster.getFileSystem().getUri().toString() + "/analytics-ha");
+            Map<MetricsAggregator.Key, MetricsAggregator.Aggregate> aggregates =
+                    MetricsAggregator.aggregate(new BufferedReader(new StringReader("""
+                        {"timestamp_ms":1791763200000,"tenant":"alpha","instance_type":"g4dn.xlarge","queue_wait_ms":10,"cost_usd":0.01,"utilization":0.8,"slo_met":true}
+                        {"timestamp_ms":1791763201000,"tenant":"alpha","instance_type":"g4dn.xlarge","queue_wait_ms":30,"cost_usd":0.02,"utilization":0.6,"slo_met":false}
+                        """)));
+
+            MetricsAggregator.writeOutputs(aggregates, outputRoot);
+            Path csv = new Path(outputRoot, "tableau/gpu_broker_metrics.csv");
+            Path parquet = new Path(outputRoot, "date=2026-10-12/tenant=alpha/g4dn.xlarge.parquet");
+            try (FileSystem fileSystem = outputRoot.getFileSystem(clientConfiguration)) {
+                assertEquals((short) 2, fileSystem.getFileStatus(csv).getReplication());
+                assertEquals((short) 2, fileSystem.getFileStatus(parquet).getReplication());
+            }
+
+            cluster.stopDataNode(0);
+
+            try (FileSystem fileSystem = outputRoot.getFileSystem(clientConfiguration);
+                 FSDataInputStream stream = fileSystem.open(csv);
+                 BufferedReader reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) {
+                assertEquals("date,tenant,instance_type,jobs,mean_queue_wait_ms,cost_usd,utilization,slo_miss_rate", reader.readLine());
+                assertEquals("2026-10-12,alpha,g4dn.xlarge,2,20.0,0.03,0.7,0.5", reader.readLine());
+            }
+            try (var reader = AvroParquetReader.<GenericRecord>builder(parquet)
+                    .withConf(clientConfiguration)
+                    .build()) {
+                GenericRecord record = reader.read();
+                assertEquals(2L, record.get("jobs"));
+                assertEquals(null, reader.read());
+            }
+        }
+    }
 }
