@@ -30,10 +30,12 @@ gradle run --args='fixtures/events.jsonl s3a://BUCKET/gpu-broker/'
 ```
 
 This proves a live S3A object-store round trip, not HDFS throughput or a
-rendered Tableau workbook. The test suite also starts a one-node Hadoop
-`MiniDFSCluster` and reads the generated CSV and Parquet back through
-`FileSystem`; this verifies the HDFS adapter path without claiming a
-multi-node cluster or throughput result:
+rendered Tableau workbook. The test suite starts Hadoop `MiniDFSCluster`
+fixtures and reads the generated CSV and Parquet back through `FileSystem`.
+The multi-node fixture uses two DataNodes with replication two, stops one
+DataNode, and verifies both outputs remain readable. This is a local
+replication and failover check, not a production HDFS capacity or throughput
+result:
 
 ```sh
 gradle test --no-daemon --max-workers=1
