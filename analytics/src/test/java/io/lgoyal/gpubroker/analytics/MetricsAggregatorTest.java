@@ -1,5 +1,6 @@
 package io.lgoyal.gpubroker.analytics;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FSDataInputStream;
@@ -22,6 +23,36 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class MetricsAggregatorTest {
     @Test
+    void keepsTenantPathSegmentsInsideOutputRoot() throws Exception {
+        assertBoundedDimensions("lab/../../../escaped", "g4dn.xlarge");
+    }
+
+    @Test
+    void keepsInstancePathSegmentsInsideOutputRoot() throws Exception {
+        assertBoundedDimensions("lab", "../../../escaped");
+    }
+
+    private void assertBoundedDimensions(String tenant, String instanceType) throws Exception {
+        java.nio.file.Path workspace = Files.createTempDirectory("gpu-broker-bounded-dimensions-");
+        java.nio.file.Path root = workspace.resolve("bounded/deep/output");
+        String event = new ObjectMapper().writeValueAsString(Map.of(
+                "timestamp_ms", 1791763200000L, "tenant", tenant, "instance_type", instanceType));
+        var aggregates = MetricsAggregator.aggregate(new BufferedReader(new StringReader(event)));
+        MetricsAggregator.writeOutputs(aggregates, new Path(root.toUri()));
+        java.util.List<java.nio.file.Path> files;
+        try (var paths = Files.walk(workspace)) {
+            files = paths.filter(path -> path.toString().endsWith(".parquet")).toList();
+        }
+        assertEquals(1, files.size());
+        assertTrue(files.get(0).startsWith(root), "dimension escaped output root: " + files.get(0));
+        try (var reader = AvroParquetReader.<GenericRecord>builder(new Path(files.get(0).toUri())).build()) {
+            GenericRecord record = reader.read();
+            assertEquals(tenant, record.get("tenant").toString());
+            assertEquals(instanceType, record.get("instance_type").toString());
+        }
+    }
+
+    @Test
     void acceptsLocalHdfsAndS3aOutputRoots() {
         assertEquals("s3a", StorageTarget.parse("s3a://metrics-bucket/run").uri().getScheme());
         assertEquals("hdfs", StorageTarget.parse("hdfs://namenode:8020/metrics").uri().getScheme());
@@ -32,6 +63,8 @@ class MetricsAggregatorTest {
     void rejectsUnscopedOrUnknownOutputRoots() {
         assertThrows(IllegalArgumentException.class, () -> StorageTarget.parse("s3a:///missing-bucket"));
         assertThrows(IllegalArgumentException.class, () -> StorageTarget.parse("http://example.com/metrics"));
+        assertThrows(IllegalArgumentException.class, () -> MetricsAggregator.writeOutputs(Map.of(), new Path("http://example.com/metrics")));
+        assertThrows(IllegalArgumentException.class, () -> MetricsAggregator.writeOutputs(Map.of(), new Path("s3a:///missing-bucket")));
     }
 
     @Test
