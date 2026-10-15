@@ -168,3 +168,39 @@ def test_the_cli_exits_zero_on_a_clean_install(tmp_path, monkeypatch):
     result = CliRunner().invoke(app, ["doctor"], catch_exceptions=False)
     assert result.exit_code == 0
     assert "everything checks out" in result.output
+
+
+def test_gce_configuration_is_recognized_without_provider_calls(broker, monkeypatch):
+    from gpu_broker.backends.gce import GceConfig
+    import google.auth
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("doctor must not discover GCE credentials")
+
+    monkeypatch.setattr(google.auth, "default", forbidden)
+    broker.config = replace(
+        broker.config,
+        backends=("gce",),
+        gce=GceConfig(
+            project="offline-project",
+            boot_image="projects/offline/global/images/test",
+            ssh_private_key="/offline/key",
+            known_hosts="/offline/known_hosts",
+            machine_types={"t4": "n1-standard-8"},
+            accelerator_types={"t4": "nvidia-tesla-t4"},
+            max_instances={"t4": 1},
+        ),
+    )
+    checks = diagnose(broker)
+    assert named(checks, "config").status == OK
+    gce = named(checks, "backend: gce")
+    assert gce.status == WARN
+    assert "not provider-validated" in gce.detail
+
+
+def test_incomplete_gce_configuration_is_reported_with_a_fix(broker):
+    broker.config = replace(broker.config, backends=("gce",))
+    gce = named(diagnose(broker), "backend: gce")
+    assert gce.status == FAIL
+    assert "gce.project" in gce.detail
+    assert "gce" in gce.fix

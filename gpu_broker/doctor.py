@@ -60,19 +60,37 @@ def diagnose(broker: Any) -> list[Check]:
             checks.extend(_aws(broker, name))
         elif name == "local":
             checks.extend(_local(broker))
+        elif name == "gce":
+            checks.append(_run("backend: gce", lambda: _gce(config.gce)))
 
     checks.append(_run("web", lambda: _web(config)))
     return checks
 
 
 def _config(config) -> Check:
-    missing = [name for name in config.backends if name not in ("fake", "ec2", "ec2-spot", "local")]
+    missing = [name for name in config.backends if name not in ("fake", "ec2", "ec2-spot", "local", "gce")]
     if missing:
         return Check("config", FAIL, f"unknown backends: {missing}")
     return Check(
         "config",
         OK,
         f"backends {list(config.backends)}, placement {list(config.placement_order)}",
+    )
+
+
+
+def _gce(config) -> Check:
+    from .errors import ConfigError
+
+    try:
+        config.require_launchable()
+    except ConfigError as exc:
+        return Check("backend: gce", FAIL, str(exc), "complete the gce configuration")
+    return Check(
+        "backend: gce",
+        WARN,
+        "launch configuration complete; credentials, connectivity and quota are not provider-validated",
+        "validate the selected GCE environment before scheduling real jobs",
     )
 
 
