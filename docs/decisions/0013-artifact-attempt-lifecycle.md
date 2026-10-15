@@ -14,6 +14,11 @@ report closes the attempt, so a late worker receives a conflict and cannot
 publish artifact metadata over a retry. An identical completion retry for
 an already completed artifact still succeeds without changing state.
 
+Upload responses can arrive after a later chunk has published its size.
+Under the same job lock, publication preserves the larger committed size
+and returns that offset, including offset-mismatch replies. A delayed
+upload cannot replace completed metadata and receives a conflict.
+
 An expired lease that has not been reclaimed remains renewable; expiry
 alone does not close its attempt. Object writes stay outside retried SQL
 transactions. Closure during an in-flight write can leave attempt-scoped
@@ -28,3 +33,7 @@ during append and seal, same-digest completion retries after a terminal
 report, and expired-but-unreclaimed accepted uploads. The tests use real
 PostgreSQL and filesystem storage. No live S3 or physical GPU result is
 implied.
+
+`artifact_ordering_test.go` holds actual object responses behind barriers
+while another chunk or completion publishes. It checks downloaded bytes,
+metadata, and the resume offset after the delayed response is released.
