@@ -84,7 +84,7 @@ func TestLowestCostAndLowestCarbonDisagreeForTheRightReason(t *testing.T) {
 	if carbon.CarbonEffect == nil || *carbon.CarbonEffect <= 0 || carbon.CarbonBasis != ecoshift.EnergyBasis {
 		t.Fatalf("carbon decision without a labelled carbon effect: %+v", carbon)
 	}
-	if carbon.PolicyVersion != "lowest-carbon@v1" || cost.BudgetEffect != 2_000_000 {
+	if carbon.PolicyVersion != "lowest-carbon@v2" || cost.BudgetEffect != 2_000_000 {
 		t.Fatalf("decision fields: %+v / %+v", carbon.PolicyVersion, cost.BudgetEffect)
 	}
 }

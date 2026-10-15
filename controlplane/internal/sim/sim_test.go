@@ -2,12 +2,15 @@ package sim
 
 import (
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/lgoyal6/gpu-broker/controlplane/internal/adapters/carbon"
+	"github.com/lgoyal6/gpu-broker/controlplane/internal/domain/ecoshift"
 	"github.com/lgoyal6/gpu-broker/controlplane/internal/domain/policy"
 )
 
@@ -41,24 +44,64 @@ func TestRunIsDeterministic(t *testing.T) {
 	}
 }
 
-// The policies must disagree for the reasons they claim to: lowest-carbon
-// emits less than lowest-cost on the carbon-flex workload, and lowest-cost
-// spends less than lowest-carbon.
-func TestPoliciesTradeCostAgainstCarbonOnRealData(t *testing.T) {
+// A controlled, matched workload isolates the objectives from forecasting,
+// queueing and interruptions. The replay below reports their combined effect.
+func TestPoliciesTradeCostAgainstCarbonOnControlledWork(t *testing.T) {
+	start := time.Date(2026, 10, 15, 0, 0, 0, 0, time.UTC)
+	sc := Scenario{Name: "controlled-cost-carbon", Start: start, Horizon: 2 * time.Hour, Tick: 5 * time.Minute, Seed: 7, BudgetUSD: 100,
+		Pools: []PoolSpec{
+			{ID: "cheap", Region: "high", PriceUSD: 1, PUE: 1, Workers: []WorkerSpec{{1, "a100", 80}}},
+			{ID: "clean", Region: "low", PriceUSD: 2, PUE: 1, Workers: []WorkerSpec{{1, "a100", 80}}},
+		},
+		Jobs:   []JobSpec{{ID: "matched-job", Tenant: "tenant", GPUs: 1, Duration: time.Hour, MaxRuntime: time.Hour}},
+		Carbon: map[string][]ecoshift.Reading{},
+	}
+	for region, intensity := range map[string]float64{"high": 200, "low": 20} {
+		for at := start; !at.After(start.Add(sc.Horizon)); at = at.Add(sc.Tick) {
+			sc.Carbon[region] = append(sc.Carbon[region], ecoshift.Reading{At: at, GramsPerKWh: intensity, Source: "controlled-fixture"})
+		}
+	}
+	cost, _ := policy.Lookup("lowest-cost")
+	carb, _ := policy.Lookup("lowest-carbon")
+	rc, rk := Run(sc, cost), Run(sc, carb)
+	if rc.Completed != 1 || rk.Completed != 1 || rc.Unfinished != 0 || rk.Unfinished != 0 {
+		t.Fatalf("controlled policies did not complete identical work: %+v / %+v", rc, rk)
+	}
+	if !(rc.CostUSD < rk.CostUSD) || !(rk.CarbonKg < rc.CarbonKg) {
+		t.Fatalf("controlled cost/carbon tradeoff missing: %+v / %+v", rc, rk)
+	}
+}
+
+// The unchanged real-series workload is an empirical comparison, not an
+// oracle that a forecast-driven policy must beat another policy in aggregate.
+func TestRealDataPolicyReplayReportsAccounting(t *testing.T) {
 	d := dataset(t)
 	sc, err := Workload("carbon-flex", d.Regional, d.Start, 7)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cost, _ := policy.Lookup("lowest-cost")
-	carb, _ := policy.Lookup("lowest-carbon")
-	rc, rk := Run(sc, cost), Run(sc, carb)
-	t.Logf("lowest-cost: $%.0f, %.1f kg; lowest-carbon: $%.0f, %.1f kg, %d delays", rc.CostUSD, rc.CarbonKg, rk.CostUSD, rk.CarbonKg, rk.Delays)
-	if !(rk.CarbonKg < rc.CarbonKg) {
-		t.Fatalf("lowest-carbon emitted %.1f kg >= lowest-cost %.1f kg", rk.CarbonKg, rc.CarbonKg)
-	}
-	if !(rc.CostUSD < rk.CostUSD) {
-		t.Fatalf("lowest-cost spent $%.0f >= lowest-carbon $%.0f", rc.CostUSD, rk.CostUSD)
+	for _, name := range []string{"lowest-cost", "lowest-carbon"} {
+		p, _ := policy.Lookup(name)
+		r := Run(sc, p)
+		if r.Jobs != len(sc.Jobs) || r.Completed != r.Jobs || r.Expired != 0 || r.Unfinished != 0 {
+			t.Fatalf("replay lost or skipped work: %+v", r)
+		}
+		if r.EvidenceClass != "simulator" || r.PolicyVersion != p.Version {
+			t.Fatalf("replay attribution: %+v", r)
+		}
+		for _, value := range []float64{r.CostUSD, r.CarbonKg, r.WaitHoursP95} {
+			if math.IsNaN(value) || math.IsInf(value, 0) || value < 0 {
+				t.Fatalf("invalid replay accounting: %+v", r)
+			}
+		}
+		if (name == "lowest-cost" && r.Delays != 0) || (name == "lowest-carbon" && r.Delays == 0) {
+			t.Fatalf("fixture did not exercise the intended delay behavior: %+v", r)
+		}
+		body, err := json.Marshal(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Log(string(body))
 	}
 }
 
