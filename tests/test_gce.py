@@ -6,6 +6,10 @@ Shell probes execute real status branches instead of assuming their output.
 from __future__ import annotations
 
 import subprocess
+import shlex
+import time
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -300,6 +304,60 @@ def test_gce_empty_status_is_not_running(rig):
     transport.responses = [""]
     with pytest.raises(BackendError, match="status is invalid"):
         backend.poll(allocation.handle)
+
+
+@pytest.fixture
+def shell_rig(rig, tmp_path):
+    backend, instances, transport = rig
+
+    def run_shell(host, command, timeout=None):
+        command = command.replace("/tmp/gpu-broker/jobs", str(tmp_path))
+        result = subprocess.run(
+            ["bash", "-c", command], capture_output=True, text=True, timeout=timeout
+        )
+        return CommandResult(result.returncode, result.stdout, result.stderr)
+
+    transport.run = run_shell
+    effects = tmp_path / "effects"
+    candidate = replace(job(), command=f"printf 'run\\n' >> {shlex.quote(str(effects))}")
+    allocation = backend.launch(candidate)
+    return backend, allocation, candidate, tmp_path / candidate.job_id, effects
+
+
+def wait_for_shell_exit(root):
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        if (root / "exit-code").exists():
+            return
+        time.sleep(0.01)
+    pytest.fail("local job shell did not record its exit")
+
+
+def test_start_preparation_failure_releases_dispatch_claim(shell_rig):
+    backend, allocation, candidate, root, effects = shell_rig
+    root.mkdir()
+    (root / "command.sh").mkdir()  # Real shell redirection failure.
+    for _ in range(2):
+        with pytest.raises(BackendError):
+            backend.start(allocation.handle, candidate)
+        assert not (root / "started").exists()
+        assert backend.poll(allocation.handle).status is BackendStatus.READY
+        assert not effects.exists()
+    (root / "command.sh").rmdir()
+    backend.start(allocation.handle, candidate)
+    wait_for_shell_exit(root)
+    assert effects.read_text().splitlines() == ["run"]
+    assert backend.poll(allocation.handle).status is BackendStatus.COMPLETED
+
+
+def test_parallel_start_shell_dispatches_command_once(shell_rig):
+    backend, allocation, candidate, root, effects = shell_rig
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        list(pool.map(lambda _: backend.start(allocation.handle, candidate), range(8)))
+    wait_for_shell_exit(root)
+    backend.start(allocation.handle, candidate)  # Retry after completion.
+    assert effects.read_text().splitlines() == ["run"]
+    assert backend.poll(allocation.handle).status is BackendStatus.COMPLETED
 
 
 @pytest.mark.parametrize("candidate_job", [job(resumable=True), job(environment="pytorch")])

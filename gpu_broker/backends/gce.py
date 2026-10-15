@@ -241,7 +241,7 @@ class GceBackend:
         )
 
     def start(self, handle: str, job: Job) -> None:
-        """Start exactly once via a remote atomic marker, without SSM semantics."""
+        """Prepare and dispatch under an atomic remote claim."""
         host = self._host(handle)
         root = f"/tmp/gpu-broker/jobs/{_safe_id(job.job_id)}"
         command_file = f"{root}/command.sh"
@@ -255,7 +255,8 @@ class GceBackend:
         script = (
             f"mkdir -p {shlex.quote(root)} || exit; "
             f"if mkdir {shlex.quote(root + '/started')} 2>/dev/null; then "
-            f"printf '%s\\n' {shlex.quote(job.command)} > {shlex.quote(command_file)} || exit; "
+            f"if ! printf '%s\\n' {shlex.quote(job.command)} > {shlex.quote(command_file)}; then "
+            f"rmdir {shlex.quote(root + '/started')}; exit 1; fi; "
             f"nohup bash -lc {shlex.quote(runner)} >> {shlex.quote(output_file)} 2>&1 </dev/null & "
             f"else test -d {shlex.quote(root + '/started')}; fi"
         )
