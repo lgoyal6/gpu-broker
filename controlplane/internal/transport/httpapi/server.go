@@ -192,13 +192,17 @@ func (e refusedJob) Unwrap() error { return e.error }
 
 // ---- idempotency ----
 
-// idempotent wraps a user mutation. Same key and same body replays the
-// stored response; same key with a different body is refused. The record is
-// written after the mutation commits; two concurrent requests with one key
-// both execute only if they race inside the gap, and the unique key then
-// rejects the second record, so the second caller gets a 409 rather than a
-// silently divergent replay.
-func (s *Server) idempotent(h handler) handler {
+// mutationStore binds a request-local Service copy to its receipt transaction.
+// Only the SQL-only submit, cancel and create-user handlers use this store.
+type mutationStore struct{ tx application.Tx }
+
+func (m mutationStore) InTx(_ context.Context, fn func(application.Tx) error) error {
+	return fn(m.tx)
+}
+
+// idempotent commits the mutation and its replay receipt together. The store
+// claims even an absent key until commit, so concurrent requests serialize.
+func (s *Server) idempotent(h func(*Server, http.ResponseWriter, *http.Request, application.Principal) error) handler {
 	return func(w http.ResponseWriter, r *http.Request, p application.Principal) error {
 		key := r.Header.Get("Idempotency-Key")
 		if key == "" || len(key) > 128 {
@@ -210,34 +214,44 @@ func (s *Server) idempotent(h handler) handler {
 		}
 		sum := sha256.Sum256(body)
 		bodyHash := hex.EncodeToString(sum[:])
-		var prior application.IdempotencyRecord
-		err = s.Svc.Store.InTx(r.Context(), func(tx application.Tx) (e error) {
-			prior, e = tx.GetIdempotency(r.Context(), p.Key(), key)
-			return e
-		})
-		switch {
-		case err == nil:
-			if prior.BodyHash != bodyHash || prior.Method != r.Method || prior.Path != r.URL.Path {
-				return application.ErrIdempotencyReused
+		var buf *bufferWriter
+		err = s.Svc.Store.InTx(r.Context(), func(tx application.Tx) error {
+			buf = &bufferWriter{header: http.Header{}, code: 200}
+			prior, err := tx.GetIdempotency(r.Context(), p.Key(), key)
+			switch {
+			case err == nil:
+				if prior.BodyHash != bodyHash || prior.Method != r.Method || prior.Path != r.URL.Path {
+					return application.ErrIdempotencyReused
+				}
+				buf.Header().Set("Content-Type", "application/json")
+				buf.Header().Set("Idempotent-Replay", "true")
+				buf.WriteHeader(prior.Status)
+				_, _ = buf.Write(prior.Response)
+				return nil
+			case !errors.Is(err, application.ErrNotFound):
+				return err
 			}
-			w.Header().Set("Content-Type", "application/json")
-			w.Header().Set("Idempotent-Replay", "true")
-			w.WriteHeader(prior.Status)
-			_, _ = w.Write(prior.Response)
-			return nil
-		case !errors.Is(err, application.ErrNotFound):
-			return err
-		}
-		r.Body = io.NopCloser(bytes.NewReader(body))
-		buf := &bufferWriter{header: http.Header{}, code: 200}
-		if err := h(buf, r, p); err != nil {
-			// Errors are not cached: a refused request may succeed later
-			// (quota frees up) and should be retryable with the same key.
-			return err
-		}
-		rec := application.IdempotencyRecord{Principal: p.Key(), Key: key, Method: r.Method, Path: r.URL.Path,
-			BodyHash: bodyHash, Status: buf.code, Response: buf.buf.Bytes(), CreatedAt: s.Svc.Clock.Now()}
-		if err := s.Svc.Store.InTx(r.Context(), func(tx application.Tx) error { return tx.PutIdempotency(r.Context(), rec) }); err != nil {
+			// Bind copies rather than changing the shared service or server.
+			svc := *s.Svc
+			svc.Store = mutationStore{tx}
+			requestServer := *s
+			requestServer.Svc = &svc
+			r.Body = io.NopCloser(bytes.NewReader(body))
+			if err := h(&requestServer, buf, r, p); err != nil {
+				var refused refusedJob
+				if !errors.As(err, &refused) {
+					// Transient refusals have no mutation and remain retryable.
+					return err
+				}
+				// Admission may persist a FAILED job. Its error receipt must
+				// commit with that row instead of creating another on retry.
+				s.writeError(buf, r, err)
+			}
+			rec := application.IdempotencyRecord{Principal: p.Key(), Key: key, Method: r.Method, Path: r.URL.Path,
+				BodyHash: bodyHash, Status: buf.code, Response: buf.buf.Bytes(), CreatedAt: s.Svc.Clock.Now()}
+			return tx.PutIdempotency(r.Context(), rec)
+		})
+		if err != nil {
 			return err
 		}
 		for k, v := range buf.header {
@@ -273,17 +287,17 @@ func (s *Server) routes() {
 		_, _ = io.WriteString(w, "ready\n")
 	})
 
-	s.handle("POST", "/v1/jobs", true, s.idempotent(s.submit))
+	s.handle("POST", "/v1/jobs", true, s.idempotent((*Server).submit))
 	s.handle("GET", "/v1/jobs", true, s.listJobs)
 	s.handle("GET", "/v1/jobs/{id}", true, s.getJob)
-	s.handle("POST", "/v1/jobs/{id}/cancel", true, s.idempotent(s.cancel))
+	s.handle("POST", "/v1/jobs/{id}/cancel", true, s.idempotent((*Server).cancel))
 	s.handle("GET", "/v1/jobs/{id}/decisions", true, s.decisions)
 	s.handle("GET", "/v1/jobs/{id}/logs", true, s.logs)
 	s.handle("GET", "/v1/jobs/{id}/artifacts/{attempt}/{name}", true, s.downloadArtifact)
 	s.handle("GET", "/v1/pools", true, s.pools)
 	s.handle("GET", "/v1/policies", true, s.policies)
 	s.handle("POST", "/v1/policy/explain", true, s.explain)
-	s.handle("POST", "/v1/users", true, s.idempotent(s.createUser))
+	s.handle("POST", "/v1/users", true, s.idempotent((*Server).createUser))
 	s.handle("GET", "/v1/trace/export", true, s.traceExport)
 	s.handle("POST", "/v1/demo/seed", true, s.demoSeed)
 

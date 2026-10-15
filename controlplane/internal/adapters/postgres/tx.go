@@ -937,6 +937,11 @@ func (t *tx) OutboxDepth(ctx context.Context) (map[string]int, error) {
 
 func (t *tx) GetIdempotency(ctx context.Context, principal, key string) (application.IdempotencyRecord, error) {
 	var r application.IdempotencyRecord
+	// A row lock cannot claim a key that does not exist yet. Hash collisions
+	// only serialize unrelated keys; ownership lasts through receipt commit.
+	if _, err := t.tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))`, principal, key); err != nil {
+		return r, err
+	}
 	err := t.tx.QueryRow(ctx, `SELECT principal, key, method, path, body_hash, status, response, created_at
 		FROM idempotency_keys WHERE principal = $1 AND key = $2`, principal, key).
 		Scan(&r.Principal, &r.Key, &r.Method, &r.Path, &r.BodyHash, &r.Status, &r.Response, &r.CreatedAt)

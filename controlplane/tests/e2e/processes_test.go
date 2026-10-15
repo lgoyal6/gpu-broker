@@ -1,6 +1,7 @@
 package e2e_test
 
 import (
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -92,6 +93,85 @@ func TestLocalProcessRecovery(t *testing.T) {
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build: %v: %s", err, output)
 	}
+	t.Run("api-idempotency-commit-sigkill", func(t *testing.T) {
+		e := testkit.New(t)
+		e.Svc.Clock = application.SystemClock{}
+		_, tenant := e.Tenant("process-tenant", 100)
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		e.Must(err)
+		addr := listener.Addr().String()
+		e.Must(listener.Close())
+		url := "http://" + addr
+		objects := t.TempDir()
+		startAPI := func() *child {
+			p := launch(t, binary, processEnv(e), "api", "--addr="+addr, "--object-dir="+objects, "--metrics-addr=")
+			eventually(t, "API readiness", func() bool {
+				client := http.Client{Timeout: 200 * time.Millisecond}
+				response, err := client.Get(url + "/readyz")
+				if err != nil {
+					return false
+				}
+				_ = response.Body.Close()
+				return response.StatusCode == 200
+			})
+			return p
+		}
+		api := startAPI()
+		// Hold the receipt INSERT at a real PostgreSQL lock, after the
+		// handler has executed its mutation but before receipt publication.
+		blocker, err := e.Store.Pool.Begin(e.Ctx)
+		e.Must(err)
+		defer blocker.Rollback(e.Ctx)
+		_, err = blocker.Exec(e.Ctx, "LOCK TABLE idempotency_keys IN SHARE MODE")
+		e.Must(err)
+		submit := func() (int, string, error) {
+			r, err := http.NewRequest("POST", url+"/v1/jobs", strings.NewReader(`{"image":"x/y:1","command":["sim"],"gpus":1,"max_runtime_s":60}`))
+			if err != nil {
+				return 0, "", err
+			}
+			r.Header.Set("Authorization", "Bearer "+tenant.Token)
+			r.Header.Set("Idempotency-Key", "crash-before-receipt")
+			r.Header.Set("Content-Type", "application/json")
+			client := http.Client{Timeout: 10 * time.Second}
+			response, err := client.Do(r)
+			if err != nil {
+				return 0, "", err
+			}
+			defer response.Body.Close()
+			body, err := io.ReadAll(response.Body)
+			return response.StatusCode, string(body), err
+		}
+		done := make(chan error, 1)
+		go func() { _, _, err := submit(); done <- err }()
+		eventually(t, "receipt INSERT blocked before commit", func() bool {
+			return e.QueryInt(`SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE '%INSERT INTO idempotency_keys%'`) == 1
+		})
+		api.kill(t)
+		e.Must(blocker.Rollback(e.Ctx))
+		if err := <-done; err == nil {
+			t.Fatal("killed API unexpectedly returned a response")
+		}
+		if e.QueryInt(`SELECT count(*) FROM jobs`) != 0 || e.QueryInt(`SELECT count(*) FROM idempotency_keys`) != 0 {
+			t.Fatal("API SIGKILL left a mutation without its receipt")
+		}
+		api = startAPI()
+		code, first, err := submit()
+		e.Must(err)
+		if code != 201 || e.QueryInt(`SELECT count(*) FROM jobs`) != 1 {
+			t.Fatalf("crash retry: %d %s", code, first)
+		}
+		api.kill(t)
+		startAPI()
+		code, replay, err := submit()
+		e.Must(err)
+		// JSONB storage may normalize whitespace, so compare the stored job ID.
+		var firstID string
+		e.Must(e.Store.Pool.QueryRow(e.Ctx, `SELECT response->>'id' FROM idempotency_keys`).Scan(&firstID))
+		if code != 201 || !strings.Contains(replay, firstID) || !strings.Contains(first, firstID) || e.QueryInt(`SELECT count(*) FROM jobs`) != 1 {
+			t.Fatalf("post-restart replay: %d %s", code, replay)
+		}
+	})
+
 	t.Run("scheduler-sigkill", func(t *testing.T) {
 		e := testkit.New(t)
 		e.Svc.Clock = application.SystemClock{}
