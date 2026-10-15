@@ -18,10 +18,15 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 CP="$ROOT/controlplane"
 CHART="$ROOT/infra/helm/gpu-broker"
-CLUSTER=gpub
+CLUSTER="${CLUSTER:-gpub}"
 NS=gpub
 OUT="${OUT:-${TMPDIR:-/tmp}/gpub-kind-e2e.json}"
 BIN="$(mktemp -d)"
+export KUBECONFIG="${GPUB_E2E_KUBECONFIG:-$BIN/kubeconfig}"
+export GPUB_E2E_DOCKER="$(command -v docker)"
+export GPUB_E2E_BUILDER="${GPUB_E2E_BUILDER:-gpub-e2e-$RANDOM-$RANDOM}"
+CREATED=0
+BUILDER_CREATED=0
 # Avoid other local brokers, including IPv6 listeners on common dev ports.
 free_port() { python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])'; }
 API_PORT=$(free_port)
@@ -36,6 +41,7 @@ fail() { echo "FAIL: $*" >&2; dump; exit 1; }
 now_ms() { python3 -c 'import time; print(int(time.time()*1000))'; }
 
 dump() {
+  [[ "$CREATED" == 1 ]] || return 0
   echo "--- diagnostics" >&2
   kubectl -n "$NS" get pods -o wide >&2 || true
   kubectl -n gpub-jobs get jobs,pods -o wide >&2 || true
@@ -46,10 +52,40 @@ dump() {
 cleanup() {
   [[ -n "${PF_API:-}" ]] && kill "$PF_API" 2>/dev/null || true
   [[ -n "${PF_STATUS:-}" ]] && kill "$PF_STATUS" 2>/dev/null || true
-  kubectl -n "$NS" delete pod gb-rollout-probe --ignore-not-found >/dev/null 2>&1 || true
-  if [[ "${KEEP:-0}" != 1 ]]; then kind delete cluster --name "$CLUSTER" >/dev/null 2>&1 || true; fi
+  if [[ "$CREATED" == 1 && "${KEEP:-0}" != 1 ]]; then
+    kind delete cluster --name "$CLUSTER" >/dev/null 2>&1 || true
+    rm -f "$KUBECONFIG"
+  fi
+  if [[ "$BUILDER_CREATED" == 1 ]]; then "$GPUB_E2E_DOCKER" buildx rm "$GPUB_E2E_BUILDER" >/dev/null 2>&1 || true; fi
+  if [[ "${KEEP:-0}" == 1 && "$CREATED" == 1 ]]; then
+    log "kept cluster $CLUSTER; kubeconfig $KUBECONFIG"
+  fi
+  if [[ "${KEEP:-0}" != 1 || "$KUBECONFIG" != "$BIN/"* ]]; then rm -rf "$BIN"; fi
 }
 trap cleanup EXIT
+
+if kind get clusters 2>/dev/null | grep -qx "$CLUSTER"; then fail "refusing to reuse existing cluster $CLUSTER"; fi
+[[ ! -e "$KUBECONFIG" ]] || fail "refusing to overwrite existing kubeconfig $KUBECONFIG"
+if "$GPUB_E2E_DOCKER" buildx inspect "$GPUB_E2E_BUILDER" >/dev/null 2>&1; then fail "refusing to reuse existing image builder $GPUB_E2E_BUILDER"; fi
+
+# Bound both image builds and Kind nodes before their processes start.
+cat > "$BIN/docker" <<'PY'
+#!/usr/bin/env python3
+import os
+import sys
+args = sys.argv[1:]
+if args[:1] == ["run"]:
+    args[1:1] = ["--memory=2g", "--cpus=2"]
+elif args[:1] == ["build"]:
+    args = ["buildx", "build", "--builder", os.environ["GPUB_E2E_BUILDER"], "--load", *args[1:]]
+binary = os.environ["GPUB_E2E_DOCKER"]
+os.execv(binary, [binary, *args])
+PY
+chmod +x "$BIN/docker"
+BUILDER_CREATED=1
+"$GPUB_E2E_DOCKER" buildx create --name "$GPUB_E2E_BUILDER" --driver docker-container \
+  --driver-opt memory=2g --driver-opt cpu-period=100000 --driver-opt cpu-quota=200000 >/dev/null
+export PATH="$BIN:$PATH"
 
 admin() { kubectl -n "$NS" exec deploy/gb-api -c api -- gpubroker admin "$@" --metrics-addr=; }
 
@@ -92,7 +128,13 @@ docker build -q -t gpubroker:dev "$CP" >/dev/null
 echo 'FROM busybox:1.36' | docker build -q -t gpub-e2e-busybox:1 - >/dev/null
 
 log "cluster"
-kind get clusters 2>/dev/null | grep -qx "$CLUSTER" || kind create cluster --config "$CP/tests/e2e/kind-config.yaml" --wait 120s
+CREATED=1
+kind create cluster --name "$CLUSTER" --config "$CP/tests/e2e/kind-config.yaml" --wait 120s
+for container in "buildx_buildkit_${GPUB_E2E_BUILDER}0" $(kind get nodes --name "$CLUSTER"); do
+  limits=$(docker inspect --format '{"step":"container_limits","name":{{json .Name}},"memory":{{.HostConfig.Memory}},"quota":{{.HostConfig.CpuQuota}},"period":{{.HostConfig.CpuPeriod}},"nano_cpus":{{.HostConfig.NanoCpus}}}' "$container")
+  python3 -c 'import json,sys; d=json.loads(sys.argv[1]); assert 0 < d["memory"] <= 2*1024**3; assert (0 < d["nano_cpus"] <= 2*10**9) or (0 < d["quota"] <= 2*d["period"])' "$limits"
+  record "$limits"
+done
 kind load docker-image gpubroker:dev gpub-e2e-busybox:1 --name "$CLUSTER" >/dev/null
 GPU_NODES=($(kubectl get nodes -l gpub.dev/pool=kind-london -o jsonpath='{.items[*].metadata.name}'))
 
