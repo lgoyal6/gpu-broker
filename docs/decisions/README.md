@@ -19,3 +19,5 @@ supersedes the old one.
 | [0011](0011-s3-resumable-artifacts.md) | Immutable S3 chunks, conditional upload manifests, and durable completion seals |
 | [0013](0013-artifact-attempt-lifecycle.md) | Fence artifact publication to the current open attempt |
 | [0014](0014-atomic-idempotency.md) | Commit idempotency receipts with user mutations |
+| [0015](0015-policy-eligibility.md) | Apply placement eligibility before holds and preemption |
+| [0016](0016-queue-admission.md) | Serialize concurrent queue admission |

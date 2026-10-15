@@ -5,7 +5,7 @@ Commands assume the release is `gb` in namespace `gpub`; `gpubroker admin`
 runs inside the API pod, which has the database URL:
 
 ```bash
-alias gbadmin='kubectl -n gpub exec deploy/gb-api -c api -- gpubroker admin --metrics-addr='
+gbadmin() { kubectl -n gpub exec deploy/gb-api -c api -- gpubroker admin "$@" --metrics-addr=; }
 ```
 
 | Runbook | Alerts |

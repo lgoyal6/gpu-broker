@@ -40,4 +40,4 @@ kubectl -n gpub rollout restart deploy/gb-scheduler
 
 Restarting is safe at any time: the new leader starts from durable state.
 Measured takeover after a forced leader deletion is in
-`docs/evidence/kind-e2e.md`.
+[the local Kubernetes evidence](../evidence/kubernetes.md).
