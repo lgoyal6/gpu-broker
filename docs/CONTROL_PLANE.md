@@ -180,3 +180,15 @@ controlplane/
 infra/helm/gpu-broker      chart, alerts, dashboards, Kind and GPU profiles
 contracts/openapi          the API contract
 ```
+
+## Current implementation references
+
+The historical ADRs retain their original text. The transition table is in
+`controlplane/internal/domain/job.go`. Admission quota and queue refusals write
+no job row; budget or pool refusal can record a FAILED job. The status role
+reads `public_pool_status_v1` and `public_queue_status_v1` from migration 0002.
+Create pilot tenants with `gpubroker admin create-tenant --evidence pilot`
+and the required tenant arguments. Generated Grafana dashboards currently
+have no evidence-class selector or default filter; inspect metric labels
+before interpreting aggregates. ADRs 0013-0015 describe the current artifact,
+idempotency and policy eligibility boundaries.
