@@ -225,6 +225,7 @@ flowchart LR
     PLACE --> LOCAL["lab pool<br/>SSH · MPS · cgroup v2"]
     PLACE --> SPOT["EC2 spot<br/>SSM · 2-min notice"]
     PLACE --> OND["EC2 on-demand<br/>SSM · CloudWatch"]
+    PLACE --> GCE["GCE on-demand<br/>Compute API · SSH"]
 
     SPOT --> CK[("S3 checkpoints<br/>manifest written last")]
     LOCAL --> VOL[("EFS / host dir<br/>/data per user")]
@@ -235,6 +236,43 @@ Two processes on purpose. `gpu web` has to be reachable for GitHub's OAuth
 callback and therefore builds **no backends at all** - it cannot launch or
 terminate anything. `gpu run` holds the AWS keys and the SSH key and does all
 the work. A cancel from a browser is a *request* the daemon acts on.
+
+GCE is an optional on-demand adapter (`pip install 'gpu-broker[gcp]'`, then
+`"gce"` in `backends` and a `gce` object in `config.json`). It uses Google
+Application Default Credentials for Compute Engine and the configured SSH key
+to execute jobs. The broker does not create firewall rules or grant IAM roles;
+the project must provide SSH reachability and permission to create, inspect,
+list, and delete instances. External IP assignment is opt-in. This adapter
+does not inherit EC2's SSM, CloudWatch, spot interruption, S3 checkpoint, ECR,
+named container-environment, or EFS behavior. Its launch validation is local
+configuration checking because Compute Engine's insert API has no dry-run;
+IAM and quota acceptance remain unverified until an explicitly authorized live
+deployment. The GCE adapter has offline SDK and transport-stub tests only.
+
+The GCE settings name the physical accelerator separately from the machine
+shape so a CPU-only VM cannot pass as GPU capacity:
+
+```json
+{
+  "backends": ["gce"],
+  "gce": {
+    "project": "gpu-lab",
+    "zone": "us-central1-a",
+    "boot_image": "projects/gpu-lab/global/images/gpu-worker",
+    "machine_types": {"t4": "n1-standard-4"},
+    "accelerator_types": {"t4": "nvidia-tesla-t4"},
+    "max_instances": {"t4": 1},
+    "ssh_username": "gpu-broker",
+    "ssh_private_key": "/etc/gpu-broker/id_ed25519",
+    "known_hosts": "/etc/gpu-broker/known_hosts"
+  }
+}
+```
+
+The boot image must have the NVIDIA driver, an SSH server, and the job runtime
+installed. Firewall policy and host-key enrollment remain operator-managed.
+Use Application Default Credentials for the daemon identity; the SDK does not
+read a service-account key from this file.
 
 ## The three rules everything else follows from
 
@@ -352,7 +390,7 @@ gpu_broker/
   store.py          the only module that writes SQL
   checkpoint.py     manifest-last uploads, S3 and local
   adapters/         what a training script imports (torch, HF, plain)
-  backends/         fake · ec2 (spot + on-demand) · local
+  backends/         fake · ec2 (spot + on-demand) · gce (on-demand) · local
   local/            SSH transport, the exact shell commands, host health
   web/              FastAPI, Jinja, ~30 lines of JS. No build step.
   web/public.py     the aggregates the status page may show, built by addition
