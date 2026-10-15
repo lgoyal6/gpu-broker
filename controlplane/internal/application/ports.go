@@ -186,6 +186,7 @@ type Tx interface {
 	PruneOutbox(ctx context.Context, deliveredBefore time.Time) (int64, error)
 	OutboxDepth(ctx context.Context) (map[string]int, error)
 
+	// GetIdempotency claims (principal,key) until commit, even when absent.
 	GetIdempotency(ctx context.Context, principal, key string) (IdempotencyRecord, error)
 	PutIdempotency(ctx context.Context, r IdempotencyRecord) error
 	PruneIdempotency(ctx context.Context, before time.Time) (int64, error)
