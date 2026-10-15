@@ -497,6 +497,30 @@ func artifactKey(tenant domain.TenantID, job domain.JobID, attempt domain.Attemp
 	return fmt.Sprintf("%s/%s/%s/%s", tenant, job, attempt, name)
 }
 
+// Lock the job before checking attempt liveness, as terminal reports and lease
+// reclamation use the same lock. Expiry alone is not closure (ADR 0004).
+func lockArtifactAttempt(ctx context.Context, tx Tx, p Principal, attempt domain.AttemptID) (domain.Job, error) {
+	a, err := tx.GetAttempt(ctx, attempt)
+	if err != nil {
+		return domain.Job{}, err
+	}
+	if a.WorkerID != p.WorkerID {
+		return domain.Job{}, ErrNotFound
+	}
+	j, err := tx.LockJob(ctx, a.JobID)
+	if err != nil {
+		return j, err
+	}
+	a, err = tx.GetAttempt(ctx, attempt)
+	if err != nil {
+		return j, err
+	}
+	if a.Outcome != "" || a.Number != j.Attempt {
+		return j, fmt.Errorf("%w: artifact attempt is closed", ErrConflict)
+	}
+	return j, nil
+}
+
 // UploadChunk appends at an explicit offset. A mismatch returns the
 // committed size so the agent resumes from there instead of guessing.
 func (s *Service) UploadChunk(ctx context.Context, p Principal, attempt domain.AttemptID, name string, offset int64, data []byte) (int64, error) {
@@ -508,14 +532,7 @@ func (s *Service) UploadChunk(ctx context.Context, p Principal, attempt domain.A
 	}
 	var key string
 	err := s.Store.InTx(ctx, func(tx Tx) error {
-		a, err := tx.GetAttempt(ctx, attempt)
-		if err != nil {
-			return err
-		}
-		if a.WorkerID != p.WorkerID {
-			return ErrNotFound
-		}
-		j, err := tx.LockJob(ctx, a.JobID)
+		j, err := lockArtifactAttempt(ctx, tx, p, attempt)
 		if err != nil {
 			return err
 		}
@@ -545,6 +562,11 @@ func (s *Service) UploadChunk(ctx context.Context, p Principal, attempt domain.A
 		size = om.Committed
 	}
 	err = s.Store.InTx(ctx, func(tx Tx) error {
+		// An external append may finish after closure. Its bytes remain scoped
+		// to the old attempt, but cannot publish new metadata over the retry.
+		if _, err := lockArtifactAttempt(ctx, tx, p, attempt); err != nil {
+			return err
+		}
 		return tx.UpsertArtifact(ctx, domain.JobArtifact{AttemptID: attempt, Name: name, Size: size, State: domain.ArtifactUploading}, key, s.Clock.Now())
 	})
 	if err != nil {
@@ -571,7 +593,10 @@ func (s *Service) CompleteArtifact(ctx context.Context, p Principal, attempt dom
 		if err != nil {
 			return err
 		}
-		return nil
+		if art.State != domain.ArtifactComplete {
+			_, err = lockArtifactAttempt(ctx, tx, p, attempt)
+		}
+		return err
 	})
 	if err != nil {
 		return err
@@ -599,6 +624,9 @@ func (s *Service) CompleteArtifact(ctx context.Context, p Principal, attempt dom
 				return nil
 			}
 			return ErrConflict
+		}
+		if _, err := lockArtifactAttempt(ctx, tx, p, attempt); err != nil {
+			return err
 		}
 		return tx.UpsertArtifact(ctx, domain.JobArtifact{AttemptID: attempt, Name: name, Size: size, SHA256: sha, State: domain.ArtifactComplete}, key, s.Clock.Now())
 	})
