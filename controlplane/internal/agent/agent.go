@@ -248,7 +248,9 @@ func (a *Agent) heartbeat(ctx context.Context) error {
 		// The control plane already reclaimed this attempt (lease expired
 		// while we were away): kill it so it stops consuming the GPU, and
 		// do not report it; its outcome is already recorded.
-		_ = a.rt.Stop(ctx, domain.AttemptID(id), domain.OutcomeLost)
+		if err := a.rt.Stop(ctx, domain.AttemptID(id), domain.OutcomeLost); err != nil {
+			return fmt.Errorf("abandon %s: %w", id, err)
+		}
 		a.forget(domain.AttemptID(id))
 		a.log.Warn("abandoned attempt the control plane reclaimed", "attempt", id)
 	}
