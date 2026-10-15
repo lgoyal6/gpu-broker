@@ -28,9 +28,13 @@ web = [
     "httpx>=0.27",
     "python-multipart>=0.0.9",
 ]
+gcp = [
+    "google-cloud-compute>=1.19,<2",
+]
 dev = [
     "gpu-broker[web]",
     "gpu-broker[otel]",
+    "gpu-broker[gcp]",
     "pytest>=8.0",
     "pytest-timeout>=2.3",
     # Mocks the real AWS APIs, so the EC2 backend is tested against what EC2
