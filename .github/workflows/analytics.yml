@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      JAVA_TOOL_OPTIONS: -XX:ActiveProcessorCount=2 -Xmx768m -Djava.io.tmpdir=${{ runner.temp }}
+      JAVA_TOOL_OPTIONS: -XX:ActiveProcessorCount=2 -Xmx768m
     defaults:
       run:
         working-directory: analytics
