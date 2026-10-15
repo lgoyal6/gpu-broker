@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from .aws import AwsConfig, load_aws_config
+from .backends.gce import GceConfig
 from .local.hosts import LocalConfig, load_local_config
 from .volumes import VolumeConfig, load_volume_config
 
@@ -200,6 +201,7 @@ class BrokerConfig:
     ready."""
 
     aws: AwsConfig = field(default_factory=AwsConfig)
+    gce: GceConfig = field(default_factory=GceConfig)
     local: LocalConfig = field(default_factory=LocalConfig)
     volumes: VolumeConfig = field(default_factory=VolumeConfig)
     environment_root: str = "~/.gpu-broker/envs"
@@ -242,10 +244,10 @@ class BrokerConfig:
 
     def validate(self) -> None:
         for name in self.backends:
-            if name not in ("fake", "ec2", "ec2-spot", "local"):
+            if name not in ("fake", "ec2", "ec2-spot", "gce", "local"):
                 raise ConfigError(
                     f"unknown backend {name!r} in config.json. "
-                    "Known: fake, ec2, ec2-spot, local"
+                    "Known: fake, ec2, ec2-spot, gce, local"
                 )
         if not self.backends:
             raise ConfigError("no backends configured: nothing could ever run")
@@ -392,6 +394,9 @@ def load_config(
     aws_settings = settings.pop("aws", None)
     if aws_settings is not None and not isinstance(aws_settings, dict):
         raise ConfigError("'aws' in config.json must be an object")
+    gce_settings = settings.pop("gce", None)
+    if gce_settings is not None and not isinstance(gce_settings, dict):
+        raise ConfigError("'gce' in config.json must be an object")
     local_settings = settings.pop("local", None)
     if local_settings is not None and not isinstance(local_settings, dict):
         raise ConfigError("'local' in config.json must be an object")
@@ -414,9 +419,26 @@ def load_config(
         if key in coerced:
             coerced[key] = tuple(coerced[key])
     coerced["aws"] = load_aws_config(aws_settings)
+    coerced["gce"] = load_gce_config(gce_settings)
     coerced["local"] = load_local_config(local_settings)
     coerced["web"] = _load_web(web_settings)
     coerced["volumes"] = load_volume_config(volume_settings)
     config = replace(BrokerConfig(db_path=root / "broker.sqlite3"), **coerced)
     config.validate()
     return config
+
+
+def load_gce_config(raw: dict | None) -> GceConfig:
+    if not raw:
+        return GceConfig()
+    known = set(GceConfig.__dataclass_fields__)
+    unknown = set(raw) - known
+    if unknown:
+        raise ConfigError(
+            f"unknown keys under 'gce' in config.json: {', '.join(sorted(unknown))}. "
+            f"Known: {', '.join(sorted(known))}"
+        )
+    settings = dict(raw)
+    if "service_account_scopes" in settings:
+        settings["service_account_scopes"] = tuple(settings["service_account_scopes"])
+    return GceConfig(**settings)

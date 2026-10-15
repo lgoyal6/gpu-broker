@@ -18,6 +18,7 @@ from .aws import make_clients
 from .backends.base import Backend
 from .backends.ec2 import Ec2Backend
 from .backends.fake import FakeBackend
+from .backends.gce import GceBackend
 from .backends.local import LocalBackend
 from .checkpoint import CheckpointStore, LocalCheckpointStore, S3CheckpointStore
 from .local.hosts import HostHealth
@@ -88,12 +89,20 @@ def build_checkpoints(config: BrokerConfig) -> CheckpointStore:
         clients = make_clients(config.aws)
         import boto3
 
-        return S3CheckpointStore(
-            boto3.client("s3", region_name=config.aws.region),
-            config.checkpoint_bucket,
-            config.checkpoint_prefix,
-        ) if clients else None  # pragma: no cover
-    root = Path(config.checkpoint_root) if config.checkpoint_root else config.db_path.parent / "checkpoints"
+        return (
+            S3CheckpointStore(
+                boto3.client("s3", region_name=config.aws.region),
+                config.checkpoint_bucket,
+                config.checkpoint_prefix,
+            )
+            if clients
+            else None
+        )  # pragma: no cover
+    root = (
+        Path(config.checkpoint_root)
+        if config.checkpoint_root
+        else config.db_path.parent / "checkpoints"
+    )
     return LocalCheckpointStore(root)
 
 
@@ -159,6 +168,31 @@ def build_backends(
                     volumes=config.volumes,
                     ecr_repository=config.ecr_repository,
                     ecr=_ecr_client(config) if config.ecr_repository else None,
+                )
+            )
+        elif name == "gce":
+            try:
+                from google.cloud import compute_v1
+            except ImportError as exc:  # pragma: no cover - optional dependency
+                raise BrokerError(
+                    "the GCE backend needs google-cloud-compute. Install it with: "
+                    "pip install 'gpu-broker[gcp]'"
+                ) from exc
+            try:
+                instances = compute_v1.InstancesClient()
+            except Exception as exc:  # ADC lookup is local; no request is sent here.
+                raise BrokerError(
+                    f"could not initialize the GCE client: {exc}. "
+                    "Configure Google Application Default Credentials for the daemon."
+                ) from exc
+            built.append(
+                GceBackend(
+                    clock=clock,
+                    config=config.gce,
+                    instances=instances,
+                    transport=SshTransport(
+                        command_timeout=config.gce.ssh_timeout_seconds
+                    ),
                 )
             )
     return built
@@ -288,7 +322,11 @@ class Broker:
             known = [e.name for e in self.store.environments()]
             raise BrokerError(
                 f"no environment called {environment!r}. "
-                + (f"Known: {', '.join(known)}" if known else "None have been created yet")
+                + (
+                    f"Known: {', '.join(known)}"
+                    if known
+                    else "None have been created yet"
+                )
             )
 
         # Membership first. Somebody who is off the pool should be told that,
@@ -318,9 +356,13 @@ class Broker:
             )
             return SubmitResult(job=job, refusal=refusal)
 
-        with tracing.span("queue.enqueue", kind="producer",
-                          gpu_type=gpu_type, requested_hours=hours,
-                          command=command) as span:
+        with tracing.span(
+            "queue.enqueue",
+            kind="producer",
+            gpu_type=gpu_type,
+            requested_hours=hours,
+            command=command,
+        ) as span:
             job = self.store.create_job(
                 user_id=user_id,
                 command=command,
@@ -334,13 +376,17 @@ class Broker:
             span.set_attribute("job_id", job.job_id)
             # The queue hop. `gpu run` is a different process and may not be
             # running yet; the row is the only thing that reaches it.
-            tracing.record_queue_context(self.store.conn, job.job_id, self.store.clock.now())
+            tracing.record_queue_context(
+                self.store.conn, job.job_id, self.store.clock.now()
+            )
         return SubmitResult(
             job=job,
             warning=admission.ceiling_warning(self.config, gpu_type, hours, reserved),
         )
 
-    def _require_officer(self, actor: str | None, what: str, *, admin: bool = False) -> None:
+    def _require_officer(
+        self, actor: str | None, what: str, *, admin: bool = False
+    ) -> None:
         """The privilege check for everything that acts on the pool itself.
 
         Same shape as the ownership check inside `cancel`, and here for the same
@@ -370,7 +416,9 @@ class Broker:
                 f"{what} is for club officers, and {actor} is not one. Ask an officer"
             )
 
-    def cancel(self, job_id: str, *, actor: str | None = None, admin: bool = False) -> Job:
+    def cancel(
+        self, job_id: str, *, actor: str | None = None, admin: bool = False
+    ) -> Job:
         """Stop a job and give back whatever it had not spent.
 
         The ownership check is here rather than only in `gpu cancel` and the web
@@ -401,7 +449,9 @@ class Broker:
         if job.backend and job.backend_handle:
             backend = self.scheduler.backend(job.backend)
             if backend is not None:
-                backend.terminate(job.backend_handle, f"cancelled by {actor or job.user_id}")
+                backend.terminate(
+                    job.backend_handle, f"cancelled by {actor or job.user_id}"
+                )
 
         return self.store.transition(
             job,
@@ -489,7 +539,9 @@ class Broker:
         backend.drain(hostname, reason)  # raises on an unknown host, before we write
         self.store.drain_host(hostname, reason, actor)
 
-    def undrain_host(self, hostname: str, actor: str = "", *, admin: bool = False) -> None:
+    def undrain_host(
+        self, hostname: str, actor: str = "", *, admin: bool = False
+    ) -> None:
         """Let a host take jobs again. The twin of `drain_host`, and checked.
 
         It used to take no actor at all, so a host an officer pulled out for a
@@ -603,7 +655,9 @@ class Broker:
     def digest(self, days: float = 7.0) -> Digest:
         return build_digest(self, days)
 
-    def refresh_baseline(self, months: int = 6, client: object | None = None) -> list[str]:
+    def refresh_baseline(
+        self, months: int = 6, client: object | None = None
+    ) -> list[str]:
         """Pull the club's pre-broker spend from Cost Explorer."""
         if client is None:
             import boto3
@@ -611,7 +665,9 @@ class Broker:
             client = boto3.client("ce", region_name="us-east-1")
         now = self.clock.now()
         start = (now - dt.timedelta(days=31 * months)).replace(day=1)
-        rows = fetch_baseline(client, start.strftime("%Y-%m-%d"), now.strftime("%Y-%m-%d"))
+        rows = fetch_baseline(
+            client, start.strftime("%Y-%m-%d"), now.strftime("%Y-%m-%d")
+        )
         for period, hours, dollars in rows:
             self.store.save_baseline(period, hours, dollars, "cost-explorer")
         return [period for period, _, _ in rows]
@@ -675,7 +731,9 @@ class Broker:
         jobs = self.store.list_jobs(user_id=user_id)
         return sorted(jobs, key=lambda job: job.submitted_at, reverse=True)[:limit]
 
-    def logs(self, job_id: str, after: int = 0) -> list[tuple[int, dt.datetime, str, str]]:
+    def logs(
+        self, job_id: str, after: int = 0
+    ) -> list[tuple[int, dt.datetime, str, str]]:
         job = self.store.find_job(job_id)
         return self.store.read_logs(job.job_id, after_id=after)
 
@@ -721,7 +779,9 @@ class Broker:
         self._require_officer(actor, "suspending a member", admin=admin)
         return self.store.suspend_user(user_id, reason=reason, actor=actor or "")
 
-    def restore_user(self, user_id: str, *, actor: str | None, admin: bool = False) -> User:
+    def restore_user(
+        self, user_id: str, *, actor: str | None, admin: bool = False
+    ) -> User:
         """Put a suspended member back.
 
         Checked for the same reason as `suspend_user`, and more urgently: a
