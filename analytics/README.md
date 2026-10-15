@@ -29,8 +29,8 @@ S3A bucket using the active AWS credential chain:
 gradle run --args='fixtures/events.jsonl s3a://BUCKET/gpu-broker/'
 ```
 
-This proves a live S3A object-store round trip, not HDFS throughput or a
-rendered Tableau workbook. The test suite starts Hadoop `MiniDFSCluster`
+The S3A command requires an authorized account and credentials; local tests do
+not establish a live object-store round trip. The test suite starts Hadoop `MiniDFSCluster`
 fixtures and reads the generated CSV and Parquet back through `FileSystem`.
 The multi-node fixture uses two DataNodes with replication two, stops one
 DataNode, and verifies both outputs remain readable. This is a local
@@ -44,10 +44,11 @@ gradle test --no-daemon --max-workers=1
 To create a Tableau Hyper extract from the CSV:
 
 ```sh
-uv run --with tableauhyperapi python scripts/build_tableau_hyper.py \
+uv run --with-requirements requirements-hyper.txt python scripts/build_tableau_hyper.py \
   /tmp/gpu-broker-analytics/tableau/gpu_broker_metrics.csv \
   /tmp/gpu-broker-analytics/tableau/gpu_broker_metrics.hyper
 ```
 
-The Hyper file is Tableau-readable and its row count is checked by the script.
+The script reads every typed cell back from Hyper and compares it with the CSV.
+CI runs the Java fixture export and this Hyper round trip with pinned dependencies.
 Desktop or Cloud workbook rendering remains a separate access gate.

@@ -32,8 +32,10 @@ declared virtual GPU capacity; it does not validate GPU hardware or adoption.
 The separate [`analytics/`](analytics/) module aggregates broker audit exports
 through Hadoop `FileSystem` and Parquet Avro APIs. It writes Hive-style date and
 tenant partitions plus a Tableau-ready CSV containing queue wait, cost,
-utilization, and SLO miss rate. The fixture is locally verified; HDFS/S3A,
-rendered Tableau workbooks, and production usage remain separate evidence gates.
+utilization, and SLO miss rate. Local MiniDFS tests verify two-DataNode replication
+and readback after one DataNode stops. The Hyper exporter verifies every typed
+cell against the CSV. Live S3A, rendered Tableau workbooks, and production usage
+remain separate evidence gates.
 
 ## Why this exists
 
