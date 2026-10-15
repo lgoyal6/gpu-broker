@@ -138,6 +138,8 @@ type Tx interface {
 	InsertTransition(ctx context.Context, r domain.TransitionRecord) error
 	ListTransitions(ctx context.Context, id domain.JobID) ([]domain.TransitionRecord, error)
 	ListJobs(ctx context.Context, tenant domain.TenantID, limit int) ([]domain.Job, error)
+	// LockAdmission serializes queue-cap checks with insertion until commit.
+	LockAdmission(ctx context.Context) error
 	CountQueued(ctx context.Context, tenant domain.TenantID) (int, error)
 	CountQueuedAll(ctx context.Context) (int, error)
 	ListQueued(ctx context.Context, limit int) ([]domain.Job, error)

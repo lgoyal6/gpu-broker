@@ -123,6 +123,9 @@ func (s *Service) Submit(ctx context.Context, p Principal, req SubmitRequest, co
 	var refusal error
 	err := s.Store.InTx(ctx, func(tx Tx) error {
 		refusal = nil
+		if err := tx.LockAdmission(ctx); err != nil {
+			return err
+		}
 		var proj domain.Project
 		var err error
 		if req.ProjectID == "" {

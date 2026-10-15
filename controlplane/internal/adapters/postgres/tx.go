@@ -434,6 +434,11 @@ func (t *tx) CountQueued(ctx context.Context, tenant domain.TenantID) (int, erro
 	return n, err
 }
 
+func (t *tx) LockAdmission(ctx context.Context) error {
+	_, err := t.tx.Exec(ctx, `SELECT pg_advisory_xact_lock(7400102::bigint)`)
+	return err
+}
+
 func (t *tx) CountQueuedAll(ctx context.Context) (int, error) {
 	var n int
 	err := t.tx.QueryRow(ctx, `SELECT count(*) FROM jobs WHERE state IN ('SUBMITTED', 'QUEUED')`).Scan(&n)
