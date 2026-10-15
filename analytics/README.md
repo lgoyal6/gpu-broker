@@ -29,6 +29,11 @@ S3A bucket using the active AWS credential chain:
 gradle run --args='fixtures/events.jsonl s3a://BUCKET/gpu-broker/'
 ```
 
+CSV dimensions use standard comma, quote and newline escaping. Tenant and
+instance values are percent-encoded when used as filesystem segments; their
+original values remain in CSV and Parquet. Bare output paths resolve to local
+file URIs, and the writer validates the storage scheme before contacting Hadoop.
+
 The S3A command requires an authorized account and credentials; local tests do
 not establish a live object-store round trip. The test suite starts Hadoop `MiniDFSCluster`
 fixtures and reads the generated CSV and Parquet back through `FileSystem`.

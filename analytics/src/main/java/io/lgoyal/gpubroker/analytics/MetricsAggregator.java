@@ -16,6 +16,7 @@ import java.io.BufferedReader;
 import java.io.BufferedWriter;
 import java.io.IOException;
 import java.io.OutputStreamWriter;
+import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Paths;
@@ -88,6 +89,10 @@ public final class MetricsAggregator {
     }
 
     public static void writeOutputs(Map<Key, Aggregate> aggregates, Path outputRoot) throws IOException {
+        if (outputRoot.toUri().getScheme() == null) {
+            outputRoot = new Path(Paths.get(outputRoot.toString()).toUri());
+        }
+        new StorageTarget(outputRoot.toUri());
         Configuration configuration = new Configuration();
         FileSystem fileSystem = outputRoot.getFileSystem(configuration);
         fileSystem.mkdirs(outputRoot);
@@ -101,9 +106,9 @@ public final class MetricsAggregator {
             }
         }
         for (Aggregate aggregate : sorted(aggregates)) {
-            Path partition = new Path(outputRoot, "date=" + aggregate.key().date() + "/tenant=" + aggregate.key().tenant());
+            Path partition = new Path(outputRoot, "date=" + aggregate.key().date() + "/tenant=" + pathSegment(aggregate.key().tenant()));
             fileSystem.mkdirs(partition);
-            Path parquet = new Path(partition, aggregate.key().instanceType() + ".parquet");
+            Path parquet = new Path(partition, pathSegment(aggregate.key().instanceType()) + ".parquet");
             try (ParquetWriter<GenericRecord> writer = AvroParquetWriter.<GenericRecord>builder(parquet)
                     .withSchema(SCHEMA)
                     .withConf(configuration)
@@ -127,9 +132,20 @@ public final class MetricsAggregator {
     }
 
     private static String csvRow(Aggregate item) {
-        return String.join(",", item.key().date(), item.key().tenant(), item.key().instanceType(),
+        return String.join(",", item.key().date(), csvField(item.key().tenant()), csvField(item.key().instanceType()),
                 Long.toString(item.jobs()), Double.toString(item.meanQueueWaitMs()), Double.toString(item.costUsd()),
                 Double.toString(item.utilization()), Double.toString(item.sloMissRate()));
+    }
+
+    private static String csvField(String value) {
+        if (value.indexOf(',') >= 0 || value.indexOf('"') >= 0 || value.indexOf('\r') >= 0 || value.indexOf('\n') >= 0) {
+            return "\"" + value.replace("\"", "\"\"") + "\"";
+        }
+        return value;
+    }
+
+    private static String pathSegment(String value) {
+        return URLEncoder.encode(value, StandardCharsets.UTF_8).replace("+", "%20");
     }
 
     private static GenericRecord record(Aggregate item) {
