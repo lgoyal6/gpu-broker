@@ -163,6 +163,9 @@ func (s *Server) snapshot(ctx context.Context) (*PublicStatusV1, error) {
 		if s.cached != nil {
 			// Serve the last good snapshot, which carries its own
 			// generated_at, rather than an error page during a DB blip.
+			if s.onAge != nil {
+				s.onAge(s.now().Sub(s.cached.GeneratedAt))
+			}
 			return s.cached, nil
 		}
 		return nil, err
