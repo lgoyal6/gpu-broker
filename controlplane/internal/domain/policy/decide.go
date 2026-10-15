@@ -165,7 +165,7 @@ func Decide(s Snapshot, p Policy) []Decision {
 
 		if len(survivors) == 0 {
 			if p.AllowPreemption {
-				if victim, w, ok := pickVictim(j, workersByID, s, free, preempted); ok {
+				if victim, w, ok := pickVictim(j, workersByID, s, free, held, avail, preempted); ok {
 					preempted[victim.JobID] = true
 					d.Action, d.Victim, d.ChosenWorker = ActionPreempt, victim.JobID, w.ID
 					d.ChosenPool = w.PoolID
@@ -457,7 +457,13 @@ func guardStarvation(j domain.Job, workers []domain.Worker, s Snapshot, p Policy
 	if p.StarvationGuard <= 0 || s.Now.Sub(j.SubmittedAt) < p.StarvationGuard {
 		return
 	}
+	if j.NotBefore != nil && s.Now.Before(*j.NotBefore) && !p.Emergency {
+		return
+	}
 	if j.Deadline != nil && !s.Now.Before(*j.Deadline) {
+		return
+	}
+	if max := s.TenantMaxGPUs[j.TenantID]; max > 0 && s.TenantActiveGPUs[j.TenantID]+j.Requirements.GPUs > max {
 		return
 	}
 	// The hold applies even when the job fits right now: under fair share it
@@ -465,13 +471,12 @@ func guardStarvation(j domain.Job, workers []domain.Worker, s Snapshot, p Policy
 	var pick *domain.Worker
 	for i := range workers {
 		w := &workers[i]
-		if _, taken := held[w.ID]; taken || w.State != domain.WorkerReady {
+		if _, taken := held[w.ID]; taken {
 			continue
 		}
-		if len(j.AllowedPools) > 0 && !containsPool(j.AllowedPools, w.PoolID) {
-			continue
-		}
-		if _, ok := w.Capability.Satisfies(j.Requirements); !ok {
+		// Ignore only occupied capacity: protection is useful when a worker
+		// must drain, but the job must satisfy every other placement gate.
+		if _, ok := filter(j, *w, s.Pools[w.PoolID], w.Capability.GPUs, held, s.ProjectAvailable, s); !ok {
 			continue
 		}
 		if pick == nil || w.FreeGPUs() > pick.FreeGPUs() {
@@ -486,7 +491,7 @@ func guardStarvation(j domain.Job, workers []domain.Worker, s Snapshot, p Policy
 // pickVictim finds a running preemptible job of strictly lower priority whose
 // removal lets j fit. Lowest priority first, then the most recently started
 // (least work lost), then job id.
-func pickVictim(j domain.Job, byID map[domain.WorkerID]domain.Worker, s Snapshot, free map[domain.WorkerID]int, taken map[domain.JobID]bool) (RunningJob, domain.Worker, bool) {
+func pickVictim(j domain.Job, byID map[domain.WorkerID]domain.Worker, s Snapshot, free map[domain.WorkerID]int, held map[domain.WorkerID]domain.JobID, avail map[domain.ProjectID]domain.MicroUSD, taken map[domain.JobID]bool) (RunningJob, domain.Worker, bool) {
 	var cands []RunningJob
 	for _, r := range s.Running {
 		if !r.Preemptible || r.Priority >= j.Priority || taken[r.JobID] {
@@ -496,13 +501,9 @@ func pickVictim(j domain.Job, byID map[domain.WorkerID]domain.Worker, s Snapshot
 		if !ok || w.State != domain.WorkerReady {
 			continue
 		}
-		if len(j.AllowedPools) > 0 && !containsPool(j.AllowedPools, w.PoolID) {
-			continue
-		}
-		if _, ok := w.Capability.Satisfies(j.Requirements); !ok {
-			continue
-		}
-		if free[w.ID]+r.GPUs < j.Requirements.GPUs {
+		// Removing a victim must make the requester fully eligible, not
+		// merely free enough GPUs for an unaffordable or forbidden job.
+		if _, ok := filter(j, w, s.Pools[w.PoolID], free[w.ID]+r.GPUs, held, avail, s); !ok {
 			continue
 		}
 		cands = append(cands, r)

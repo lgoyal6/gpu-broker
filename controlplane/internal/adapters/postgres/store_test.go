@@ -165,8 +165,25 @@ func TestConcurrentPolicyRegistrationAndVersionImmutability(t *testing.T) {
 		}()
 	}
 	wg.Wait()
-	e.Exec(`UPDATE scheduling_policies SET spec = jsonb_set(spec, '{Weights,Cost}', '9') WHERE version = 'balanced@v1'`)
+	e.Exec(`UPDATE scheduling_policies SET spec = jsonb_set(spec, '{Weights,Cost}', '9') WHERE version = $1`, e.Svc.Policies["balanced"].Version)
 	if err := e.Svc.RegisterPolicies(e.Ctx); !errors.Is(err, application.ErrConflict) {
 		t.Fatalf("changed spec under the same version accepted: %v", err)
+	}
+}
+
+func TestPolicyVersionUpgradePreservesHistoricalSpec(t *testing.T) {
+	e := testkit.New(t)
+	e.Exec(`DELETE FROM scheduling_policies`)
+	prior := e.Svc.Policies["balanced"]
+	prior.Version = "balanced@v1"
+	e.Must(e.Store.InTx(e.Ctx, func(tx application.Tx) error { return tx.UpsertPolicy(e.Ctx, prior) }))
+	var before, after string
+	e.Must(e.Store.Pool.QueryRow(e.Ctx, `SELECT spec::text FROM scheduling_policies WHERE version = 'balanced@v1'`).Scan(&before))
+	for range 2 {
+		e.Must(e.Svc.RegisterPolicies(e.Ctx))
+	}
+	e.Must(e.Store.Pool.QueryRow(e.Ctx, `SELECT spec::text FROM scheduling_policies WHERE version = 'balanced@v1'`).Scan(&after))
+	if before != after || e.QueryInt(`SELECT count(*) FROM scheduling_policies WHERE name = 'balanced'`) != 2 || e.QueryInt(`SELECT count(*) FROM scheduling_policies`) != int64(len(e.Svc.Policies)+1) {
+		t.Fatal("version upgrade changed history or failed to register the new version idempotently")
 	}
 }
