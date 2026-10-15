@@ -567,10 +567,23 @@ func (s *Service) UploadChunk(ctx context.Context, p Principal, attempt domain.A
 		if _, err := lockArtifactAttempt(ctx, tx, p, attempt); err != nil {
 			return err
 		}
+		current, _, err := tx.GetArtifact(ctx, attempt, name)
+		if err != nil {
+			return err
+		}
+		// Object responses can arrive out of order. Preserve newer committed
+		// progress and return its offset to resumable clients.
+		size = max(size, current.Size)
+		if current.State == domain.ArtifactComplete {
+			return fmt.Errorf("%w: artifact already complete", ErrConflict)
+		}
 		return tx.UpsertArtifact(ctx, domain.JobArtifact{AttemptID: attempt, Name: name, Size: size, State: domain.ArtifactUploading}, key, s.Clock.Now())
 	})
 	if err != nil {
 		return size, err
+	}
+	if appendErr != nil {
+		appendErr = &OffsetMismatchError{Committed: size}
 	}
 	return size, appendErr
 }
