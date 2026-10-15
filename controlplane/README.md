@@ -23,14 +23,17 @@ capacity are modelled; simulator output is not measured savings or usage.
 Requires Docker, Kind 0.33.0, kubectl, Helm 4.3.0 and Go. From the repository root:
 
 ```bash
+export GPUB_E2E_KUBECONFIG="$(mktemp -d)/config"
 KEEP=1 OUT=/tmp/gpub-kind-e2e.json bash controlplane/tests/e2e/kind.sh
+export KUBECONFIG="$GPUB_E2E_KUBECONFIG"
 kubectl -n gpub port-forward svc/gb-api 18080:8080
 ```
 
 The script creates the dedicated `gpub` cluster, deploys the control plane,
 runs real busybox containers, and exercises upgrades and failure recovery.
-It deletes this cluster on exit unless `KEEP=1`. Do not run it against a
-cluster with work you need to preserve.
+It refuses an existing cluster or kubeconfig and deletes only the cluster it
+creates, unless `KEEP=1`. Image builds and each Kind node are capped at 2 GB
+and 2 CPUs. `CLUSTER` selects a fresh name when `gpub` is already in use.
 
 In another terminal, build the client and create a local tenant:
 
@@ -67,7 +70,15 @@ go vet ./...
 go test -p 2 -race -count=1 ./...
 GPUB_REQUIRE_DB=1 GPUB_TEST_DATABASE_URL='postgres://USER:PASSWORD@HOST/DATABASE' \
   go test -p 2 -race -count=1 -timeout=15m ./...
+GPUB_REQUIRE_DB=1 GPUB_PROCESS_TESTS=1 \
+  GPUB_TEST_DATABASE_URL='postgres://USER:PASSWORD@HOST/DATABASE' \
+  go test -p 2 -race -count=1 ./tests/e2e
 ```
+
+The process controls SIGKILL real scheduler, API and agent processes against
+PostgreSQL. The agent runtime in these controls is the persisted simulator;
+the separate Kind harness runs actual workload containers. Worker-loss
+reclamation uses explicit lease/heartbeat timestamp fault injection.
 
 Without a database URL, database integration tests skip. CI requires one so
 missing configuration cannot produce a passing integration result. The

@@ -10,6 +10,7 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     services:
       postgres:
         image: postgres:16.6-alpine@sha256:1d04b9ba1d4996401f2552b51beda8187f175c0645c091e4781134fc9c9a3eef
@@ -18,13 +19,14 @@ jobs:
           POSTGRES_PASSWORD: gpub
           POSTGRES_DB: gpub
         ports: ["5432:5432"]
-        options: --health-cmd "pg_isready -U gpub" --health-interval 5s --health-timeout 5s --health-retries 12
+        options: --memory 2g --cpus 2 --health-cmd "pg_isready -U gpub" --health-interval 5s --health-timeout 5s --health-retries 12
     defaults:
       run:
         working-directory: controlplane
     env:
       GPUB_TEST_DATABASE_URL: postgres://gpub:gpub@localhost:5432/gpub?sslmode=disable
       GPUB_REQUIRE_DB: "1"
+      GPUB_PROCESS_TESTS: "1"
       GOMAXPROCS: "2"
       GOFLAGS: -p=2
     steps:
@@ -46,6 +48,7 @@ jobs:
   kind:
     needs: test
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     env:
       GOMAXPROCS: "2"
       GOFLAGS: -p=2
