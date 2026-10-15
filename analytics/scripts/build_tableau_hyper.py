@@ -20,7 +20,13 @@ from tableauhyperapi import (
 
 
 def build(input_csv: Path, output_hyper: Path) -> tuple[int, int]:
-    rows = list(csv.DictReader(input_csv.open(newline="", encoding="utf-8")))
+    with input_csv.open(newline="", encoding="utf-8") as stream:
+        rows = [
+            [date.fromisoformat(row["date"]), row["tenant"], row["instance_type"],
+             int(row["jobs"]), float(row["mean_queue_wait_ms"]), float(row["cost_usd"]),
+             float(row["utilization"]), float(row["slo_miss_rate"])]
+            for row in csv.DictReader(stream)
+        ]
     table = TableDefinition(
         TableName("Extract", "Extract"),
         [
@@ -40,22 +46,15 @@ def build(input_csv: Path, output_hyper: Path) -> tuple[int, int]:
             connection.catalog.create_schema("Extract")
             connection.catalog.create_table(table)
             with Inserter(connection, table) as inserter:
-                for row in rows:
-                    inserter.add_row(
-                        [
-                            date.fromisoformat(row["date"]),
-                            row["tenant"],
-                            row["instance_type"],
-                            int(row["jobs"]),
-                            float(row["mean_queue_wait_ms"]),
-                            float(row["cost_usd"]),
-                            float(row["utilization"]),
-                            float(row["slo_miss_rate"]),
-                        ]
-                    )
+                inserter.add_rows(rows)
                 inserter.execute()
-            count = int(connection.execute_scalar_query('SELECT COUNT(*) FROM "Extract"."Extract"'))
-            return count, output_hyper.stat().st_size
+            actual = connection.execute_list_query(
+                'SELECT * FROM "Extract"."Extract" ORDER BY 1,2,3,4,5,6,7,8'
+            )
+            actual = [[row[0].to_date(), *row[1:]] for row in actual]
+            if actual != sorted(rows):
+                raise RuntimeError("Hyper readback differs from the input CSV")
+            return len(actual), output_hyper.stat().st_size
 
 
 def main() -> None:
