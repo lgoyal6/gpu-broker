@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "source_commit": "03f00dc67e513f644f57f5ccdb4636c980eddd95",
+  "source_commit": "4169b5d6ddbcf68a0a1ede0992a9c6bb897f35f1",
   "generation_argv": [
     "go",
     "run",
@@ -101,7 +101,7 @@
     },
     {
       "path": "public-demo/site/app.js",
-      "sha256": "a6570911a40b891d65f2d38ecb922dde02dc52b0c555422246e329bd28f69334"
+      "sha256": "a4554cc187f509ad7d9665486fb23139546e59dddca7b22147384f50f67ecf44"
     },
     {
       "path": "public-demo/site/sim-worker.js",
