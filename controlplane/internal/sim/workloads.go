@@ -30,6 +30,40 @@ func Fleet() []PoolSpec {
 // WorkloadNames lists the named workloads in report order.
 var WorkloadNames = []string{"steady-mixed", "bursty-tenant", "deadline-crunch", "carbon-flex"}
 
+// DemoWorkload bounds a generated workload for one interactive browser run.
+// It reuses the named workload generator and the production policy simulator.
+// The cap keeps untrusted browser inputs from creating a long CPU task.
+func DemoWorkload(name string, regional map[string][]ecoshift.Reading, datasetStart time.Time, seed uint64, maxJobs int) (Scenario, error) {
+	if maxJobs < 1 || maxJobs > 64 {
+		return Scenario{}, fmt.Errorf("demo job count must be between 1 and 64")
+	}
+	sc, err := Workload(name, regional, datasetStart, seed)
+	if err != nil {
+		return Scenario{}, err
+	}
+	sort.SliceStable(sc.Jobs, func(i, j int) bool {
+		if sc.Jobs[i].Submit != sc.Jobs[j].Submit {
+			return sc.Jobs[i].Submit < sc.Jobs[j].Submit
+		}
+		return sc.Jobs[i].ID < sc.Jobs[j].ID
+	})
+	withinHorizon := sc.Jobs[:0]
+	for _, job := range sc.Jobs {
+		if job.Submit < 24*time.Hour {
+			withinHorizon = append(withinHorizon, job)
+		}
+		if len(withinHorizon) == maxJobs {
+			break
+		}
+	}
+	if len(withinHorizon) == 0 {
+		return Scenario{}, fmt.Errorf("workload %q produced no jobs inside the demo horizon", name)
+	}
+	sc.Jobs = withinHorizon
+	sc.Horizon = 24 * time.Hour
+	return sc, nil
+}
+
 // Workload builds a named workload over the carbon dataset. The simulation
 // starts 8 days into the dataset so the forecaster has a week of history.
 func Workload(name string, regional map[string][]ecoshift.Reading, datasetStart time.Time, seed uint64) (Scenario, error) {

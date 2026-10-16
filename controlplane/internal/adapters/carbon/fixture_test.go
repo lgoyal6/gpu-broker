@@ -28,6 +28,24 @@ func TestFixtureLoadsAndVerifiesItsChecksum(t *testing.T) {
 	}
 }
 
+func TestParseMatchesFileLoader(t *testing.T) {
+	raw, err := os.ReadFile(fixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fromFile, err := Load(fixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fromBytes, err := Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fromBytes.Manifest.SHA256 != fromFile.Manifest.SHA256 || !fromBytes.Start.Equal(fromFile.Start) || len(fromBytes.Regional) != len(fromFile.Regional) {
+		t.Fatalf("byte parser differs from file loader: %+v / %+v", fromBytes.Manifest, fromFile.Manifest)
+	}
+}
+
 func TestReplayIsRelabelled(t *testing.T) {
 	d, err := Load(fixture)
 	if err != nil {
