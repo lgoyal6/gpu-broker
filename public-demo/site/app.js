@@ -1,5 +1,6 @@
 import {showSources, options, number, text, table, bars} from "./shared.js";
 let data;
+let simulatorWorker;
 const metrics = {
   carbon_kg_estimate:{label:"Estimated carbon",unit:"kg CO₂",lower:true},
   cost_usd:{label:"Estimated cost",unit:"USD",lower:true},
@@ -39,15 +40,61 @@ function reset() {
   for (const [id,value] of [["#workload","carbon-flex"],["#policy","lowest-carbon"],["#reference","lowest-cost"],["#metric","carbon_kg_estimate"]]) document.querySelector(id).value=value;
   update();
 }
+function setRunStatus(message) {
+  text("#run-status", message);
+}
+function showRunResult(payload) {
+  const target = document.querySelector("#run-results");
+  target.replaceChildren();
+  const result = payload.result;
+  const heading = document.createElement("h3");
+  heading.textContent = payload.policy + " (" + payload.policy_version + ")";
+  const summary = document.createElement("p");
+  summary.textContent = result.completed + " / " + result.jobs + " jobs completed; " + result.unfinished_at_horizon + " unfinished; p95 wait " + number(result.wait_hours_p95) + " h; estimated cost $" + number(result.cost_usd) + "; estimated emissions " + number(result.carbon_kg_estimate) + " kg CO₂.";
+  const limits = document.createElement("p");
+  limits.className = "small";
+  limits.textContent = "Evidence class: " + payload.evidence_class + ". Seed 42, at most 32 generated jobs, one-day horizon. Fleet and prices are modelled; no GPU workload ran.";
+  target.append(heading, summary, limits);
+}
+function stopRun(message = "Run stopped. The worker was terminated.") {
+  if (simulatorWorker) simulatorWorker.terminate();
+  simulatorWorker = undefined;
+  document.querySelector("#run-simulation").disabled = false;
+  document.querySelector("#stop-simulation").disabled = true;
+  setRunStatus(message);
+}
+function startRun() {
+  stopRun("Starting a fresh browser worker...");
+  document.querySelector("#run-simulation").disabled = true;
+  document.querySelector("#stop-simulation").disabled = false;
+  simulatorWorker = new Worker("./sim-worker.js");
+  simulatorWorker.onmessage = event => {
+    if (event.data.type === "started") {
+      setRunStatus("Running the bounded Go simulation in this browser...");
+    } else if (event.data.type === "result") {
+      simulatorWorker?.terminate(); simulatorWorker = undefined;
+      document.querySelector("#run-simulation").disabled = false;
+      document.querySelector("#stop-simulation").disabled = true;
+      if (event.data.payload.error) setRunStatus(event.data.payload.error);
+      else { setRunStatus("Browser simulation finished."); showRunResult(event.data.payload); }
+    } else if (event.data.type === "error") stopRun(event.data.message);
+  };
+  simulatorWorker.onerror = event => stopRun("Browser simulation failed to start: " + event.message);
+  simulatorWorker.postMessage({workload:document.querySelector("#run-workload").value,
+    policy:document.querySelector("#run-policy").value, seed:42, max_jobs:32});
+}
 try {
   const response=await fetch("./data.json"); if (!response.ok) throw new Error("recording unavailable");
   data=await response.json();
   const unique = key => [...new Set(data.results.map(row=>row[key]))].sort();
   options("#workload",unique("workload"),"carbon-flex");
   options("#policy",unique("policy"),"lowest-carbon"); options("#reference",unique("policy"),"lowest-cost");
+  options("#run-policy",unique("policy"),"lowest-carbon");
   options("#metric",Object.keys(metrics),"carbon_kg_estimate",key=>metrics[key].label);
   for (const id of ["#workload","#policy","#reference","#metric"]) document.querySelector(id).addEventListener("change",update);
   document.querySelector("#reset").addEventListener("click",reset);
+  document.querySelector("#run-simulation").addEventListener("click",startRun);
+  document.querySelector("#stop-simulation").addEventListener("click",()=>stopRun());
   text("#dataset","Historical carbon dataset: "+data.carbon_dataset+". Dataset payload SHA-256: "+data.carbon_dataset_sha256+".");
   showSources(data,"lgoyal6/gpu-broker"); reset(); document.querySelector("#app").hidden=false;
 } catch (error) {

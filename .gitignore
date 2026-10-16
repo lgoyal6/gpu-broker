@@ -15,6 +15,12 @@ __pycache__/
 
 # Static export of the status page, and the host's link to its project
 site/
+!public-demo/site/
+public-demo/site/*
+!public-demo/site/carbon-fixture.json
+!public-demo/site/gpubroker.wasm
+!public-demo/site/sim-worker.js
+!public-demo/site/wasm_exec.js
 .vercel/
 .env.local
 
