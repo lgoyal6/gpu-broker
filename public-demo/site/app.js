@@ -65,6 +65,7 @@ function stopRun(message = "Run stopped. The worker was terminated.") {
 }
 function startRun() {
   stopRun("Starting a fresh browser worker...");
+  document.querySelector("#run-results").replaceChildren();
   document.querySelector("#run-simulation").disabled = true;
   document.querySelector("#stop-simulation").disabled = false;
   simulatorWorker = new Worker("./sim-worker.js");
