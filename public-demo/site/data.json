@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "source_commit": "4169b5d6ddbcf68a0a1ede0992a9c6bb897f35f1",
+  "source_commit": "14cc56ee292fd81acfb4da9cffc122e02b4877c0",
   "generation_argv": [
     "go",
     "run",
@@ -97,7 +97,7 @@
     },
     {
       "path": "public-demo/export.py",
-      "sha256": "fe5744168739dee6bacec3b2717afdb6f4fac1a9aaff4a180c795b8ee083c7ef"
+      "sha256": "c28cc484eca4b43a0f4ccaff8efe36e2d62f4ea912821429b2e0c7ef4ffae2d2"
     },
     {
       "path": "public-demo/site/app.js",
