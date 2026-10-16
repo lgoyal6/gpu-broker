@@ -499,3 +499,41 @@ def meta_lines(job_id: str, user_id: str, launched_at: str, gpu: int) -> tuple[s
 
 def remove_job_dir(root: str, job_id: str) -> str:
     return f"rm -rf {shlex.quote(job_dir(root, job_id))}"
+
+
+def environment_present(root: str, digest: str) -> str:
+    """Does this host already have the finished environment for this digest?
+
+    Only the final path counts. `Environment.venv_script` installs into
+    `<root>/.building-<digest>` and moves the tree into `<root>/<digest>` at the
+    end, so a build that is still running -- or one that died halfway -- is never
+    at the path this asks about. Testing `bin/python` for executability rather
+    than testing the directory means "there is an interpreter to run here", not
+    "somebody once made a directory with this name".
+
+    The answer is a literal marker rather than an exit status, so a host that
+    answers something else entirely is distinguishable from one that answered
+    "no". Those two have to be told apart: see `parse_environment_present`.
+    """
+    target = shlex.quote(f"{root}/{digest}")
+    return (
+        f"if [ -x {target}/bin/python ]; then printf 'environment=present\\n'; "
+        f"else printf 'environment=absent\\n'; fi"
+    )
+
+
+def parse_environment_present(stdout: str) -> bool | None:
+    """True, False, or None for "the host did not answer the question".
+
+    None is not False, and the difference matters. False is an observation -- the
+    environment is not there -- and is worth remembering. None means the probe
+    failed, and remembering it would turn one unreadable reply into five minutes
+    of pretending to know something.
+    """
+    for line in reversed(stdout.strip().splitlines()):
+        entry = line.strip()
+        if entry == "environment=present":
+            return True
+        if entry == "environment=absent":
+            return False
+    return None

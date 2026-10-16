@@ -94,6 +94,23 @@ class FakeGpuHost:
         self.next_pid = 4100
         self.pmon_works = True
 
+        self.environment_dirs: dict[str, bool] = {}
+        """What is in the environment root, by directory name, and whether that
+        directory has an executable `bin/python` in it.
+
+        Modelled as a directory listing rather than as a set of "ready digests"
+        on purpose. A half-finished build is a real directory called
+        `.building-<digest>` that really does contain an interpreter, so a fake
+        that stored "which digests are ready" would answer the partial-build
+        question by construction instead of by looking where the broker looks."""
+
+        self.environment_probes: list[str] = []
+        """Every directory the broker asked about, in order. Tests assert on the
+        count as well as the answer: a locality probe that fires when the
+        placement was already decided is a round trip nobody needed."""
+
+        self.environment_probe_works = True
+
     # ------------------------------------------------------ test controls
 
     def unit_for_job(self, job_id: str) -> Unit:
@@ -179,6 +196,9 @@ class FakeGpuHost:
             # The limit probe. `systemd-run` exits zero either way; what
             # differs is whether the scope actually got the cap.
             return 0, ("67108864\n" if self.limits_apply else "max\n"), ""
+
+        if command.startswith("if [ -x ") and "environment=present" in command:
+            return self._environment(command)
 
         if "nvidia-cuda-mps-control -d" in command:
             if not self.mps_can_start:
@@ -272,6 +292,22 @@ class FakeGpuHost:
         )
         self.next_pid += 1
         return 0, "", f"Running as unit: {unit_name}.service\n"
+
+    def _environment(self, command: str) -> tuple[int, str, str]:
+        """Answer the environment-locality probe by looking at the path asked for.
+
+        The broker asks about `<root>/<digest>/bin/python` and nothing else, so a
+        staging directory, a differently named digest, or a directory with no
+        interpreter in it all fall out of the lookup as absent rather than being
+        special-cased here.
+        """
+        path = _group(command, r"if \[ -x '?([^' ]+)'?/bin/python \]") or ""
+        directory = path.rstrip("/").rsplit("/", 1)[-1]
+        self.environment_probes.append(directory)
+        if not self.environment_probe_works:
+            return 1, "", "ls: cannot access: Input/output error\n"
+        present = self.environment_dirs.get(directory, False)
+        return 0, f"environment={'present' if present else 'absent'}\n", ""
 
     def _utilization(self, command: str) -> tuple[int, str, str]:
         """Answer the per-process probe: cgroup PIDs, then pmon, then memory.
@@ -403,8 +439,14 @@ class SshHostServer:
         )
         return self._server.sockets[0].getsockname()[1]
 
-    def spec(self) -> HostSpec:
-        return HostSpec(hostname="127.0.0.1", username="broker", port=self.port)
+    def spec(self, hostname: str = "127.0.0.1") -> HostSpec:
+        """How the broker reaches this server.
+
+        The hostname is an argument because it is the broker's *identity* for a
+        host as well as its address, and the pool tie-breaks on it. A test that
+        needs two hosts needs two names that both resolve to this machine.
+        """
+        return HostSpec(hostname=hostname, username="broker", port=self.port)
 
     def close(self) -> None:
         """Idempotent: tests close the server to simulate a host vanishing, and
