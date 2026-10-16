@@ -9,13 +9,19 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 HERE = Path(__file__).parent
 DATASET = "controlplane/data/carbon/gb-2026-08-03_2026-09-28.json"
+DATASET_ASSET = HERE / "site" / "carbon-fixture.json"
 FILES = [
     "controlplane/cmd/gpubroker/offline.go",
+    "controlplane/cmd/gpubroker-wasm/main_js.go",
     *sorted(str(path.relative_to(ROOT)) for folder in [
         "controlplane/internal/sim", "controlplane/internal/domain",
         "controlplane/internal/adapters/carbon"] for path in (ROOT / folder).rglob("*.go")
         if not path.name.endswith("_test.go")),
     DATASET, "controlplane/go.mod", "controlplane/go.sum",
+    "public-demo/build_wasm.sh", "public-demo/export.py",
+    "public-demo/site/app.js", "public-demo/site/sim-worker.js",
+    "public-demo/site/index.html", "public-demo/site/style.css",
+    "public-demo/site/wasm_exec.js",
 ]
 COMMAND = ["go", "run", "./cmd/gpubroker", "sim", "--seed", "42",
            "--workload", "all", "--policy", "all"]
@@ -61,8 +67,11 @@ if __name__ == "__main__":
     if args.check:
         if not target.exists() or target.read_text() != result:
             raise SystemExit("Recorded demo export is stale; run python3 public-demo/export.py")
+        if not DATASET_ASSET.exists() or DATASET_ASSET.read_bytes() != (ROOT / DATASET).read_bytes():
+            raise SystemExit("Browser carbon fixture is stale; run python3 public-demo/export.py")
         print("Simulator export and all native source hashes match.")
     else:
         target.parent.mkdir(exist_ok=True)
         target.write_text(result)
+        DATASET_ASSET.write_bytes((ROOT / DATASET).read_bytes())
         print(target)

@@ -20,3 +20,15 @@ python3 public-demo/export.py --check
 Refresh runs only `gpubroker sim`, seed 42, all policies and workloads. It starts no DB, cloud worker, model inference or job. The exporter drops nondeterministic wall-clock timing data; estimates and adverse outcomes remain. This dataset is simulated, with modelled capacity/prices/power and historical GB carbon data. It is not measured savings, adoption, or live carbon.
 
 Vercel project root: `public-demo`; static output: `site`. No build command, credentials, environment variables or functions are required. This lane starts on free hosting. Publish only after exact-source independent review. No admin, job-submission, AWS or database endpoint is exposed.
+
+## Browser simulator
+
+The page also runs one bounded workload in a Web Worker using the repository's Go simulator compiled to WebAssembly. The worker caps the run at 32 jobs and one simulated day; terminating the worker cancels it. Go checksum-verifies the historical carbon fixture before use. Browser results remain labelled `simulator`, and no GPU, cloud account, provider API or database is contacted.
+
+Build the browser binary and matching Go runtime with:
+
+```sh
+./public-demo/build_wasm.sh
+```
+
+Then refresh and verify static assets with `python3 public-demo/export.py` and `python3 public-demo/export.py --check` from the repository root. The WASM binary and runtime are generated assets and should be rebuilt with the repository's Go version before publishing.

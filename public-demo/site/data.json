@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "source_commit": "1fff494ba85245d53e0e907220679161461f41c1",
+  "source_commit": "03f00dc67e513f644f57f5ccdb4636c980eddd95",
   "generation_argv": [
     "go",
     "run",
@@ -20,8 +20,12 @@
       "sha256": "144f419ec37c1123f5381b73aab78e8cc4f6560a5a67c85fbdfb0a48076c4dc0"
     },
     {
+      "path": "controlplane/cmd/gpubroker-wasm/main_js.go",
+      "sha256": "83ae3eab5bdd9d2dae5348b723da2c40787939c67062adbbd463b61192f286e6"
+    },
+    {
       "path": "controlplane/internal/adapters/carbon/fixture.go",
-      "sha256": "d4c033c3dd35e6a51cb574815be63a6f658ce8e8be333ae2d462ba8c78153258"
+      "sha256": "0a960baf249792ff4bc6c274de9dc2a31d01c2dcb1b8231eb3badbe9c4f9c90d"
     },
     {
       "path": "controlplane/internal/adapters/carbon/live.go",
@@ -73,7 +77,7 @@
     },
     {
       "path": "controlplane/internal/sim/workloads.go",
-      "sha256": "c764a86f2d4908d982e801f6eb57ca55f1458690bdc89345fc6c10094b788c26"
+      "sha256": "23e9fd5553dfbf999bd2db8a8e5e55abce01c86d9c430b1e159990035f80b6e1"
     },
     {
       "path": "controlplane/data/carbon/gb-2026-08-03_2026-09-28.json",
@@ -86,6 +90,34 @@
     {
       "path": "controlplane/go.sum",
       "sha256": "448e1797c7f7a4d4bb7a11bf6b420d57d6015b612e3345ccb4b052e20f2d79e7"
+    },
+    {
+      "path": "public-demo/build_wasm.sh",
+      "sha256": "47dd1620386063b2f6e5b351518536d71cdc9f827f68f897be256b669bbfe707"
+    },
+    {
+      "path": "public-demo/export.py",
+      "sha256": "fe5744168739dee6bacec3b2717afdb6f4fac1a9aaff4a180c795b8ee083c7ef"
+    },
+    {
+      "path": "public-demo/site/app.js",
+      "sha256": "a6570911a40b891d65f2d38ecb922dde02dc52b0c555422246e329bd28f69334"
+    },
+    {
+      "path": "public-demo/site/sim-worker.js",
+      "sha256": "69c5c042c82681c99673125f1b84fa25d6bb59e2807f5eedaa551d80742fb86a"
+    },
+    {
+      "path": "public-demo/site/index.html",
+      "sha256": "d0ad8a49035d6a1aa856e403f6fc886c11a29e7df94a6643310591bf75596dce"
+    },
+    {
+      "path": "public-demo/site/style.css",
+      "sha256": "a44ecf3707ffb3454db5a6c11615aff4c80caaddb3104d5a32de015f32fb6fd7"
+    },
+    {
+      "path": "public-demo/site/wasm_exec.js",
+      "sha256": "0c949f4996f9a89698e4b5c586de32249c3b69b7baadb64d220073cc04acba14"
     }
   ],
   "evidence_class": "simulator",
