@@ -3,6 +3,7 @@ import importlib.util
 import json
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
 SPEC = importlib.util.spec_from_file_location("demo_export", Path(__file__).with_name("export.py"))
 exporter = importlib.util.module_from_spec(SPEC)
@@ -16,9 +17,22 @@ class RecordingTest(unittest.TestCase):
 
     def test_committed_export_keeps_all_native_results(self):
         actual = json.loads(Path(__file__).with_name("site").joinpath("data.json").read_text())
-        self.assertEqual(self.data, actual)
+        exporter.verify_export(actual, exporter.extract(self.raw))
         self.assertEqual(self.raw["results"], actual["results"])
         self.assertEqual(32, len(actual["results"]))
+
+    def test_source_hash_and_result_tampering_are_rejected(self):
+        for field in ["sources", "results"]:
+            changed = json.loads(json.dumps(self.data))
+            changed[field] = []
+            with self.assertRaises(ValueError):
+                exporter.verify_export(changed, exporter.extract(self.raw))
+
+    def test_rebase_keeps_content_checks_without_a_historical_object(self):
+        changed = dict(self.data, source_commit="0" * 40)
+        with patch.object(exporter.subprocess, "run") as run:
+            run.return_value.returncode = 1
+            self.assertIn("unavailable", exporter.verify_export(changed, exporter.extract(self.raw)))
 
     def test_carbon_label_does_not_turn_a_loss_into_savings(self):
         rows = {row["policy"]: row for row in self.data["results"] if row["workload"] == "carbon-flex"}
