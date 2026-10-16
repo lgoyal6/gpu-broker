@@ -44,6 +44,35 @@ func TestRunIsDeterministic(t *testing.T) {
 	}
 }
 
+func TestDemoWorkloadIsBoundedAndDeterministic(t *testing.T) {
+	d := dataset(t)
+	first, err := DemoWorkload("carbon-flex", d.Regional, d.Start, 42, 32)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := DemoWorkload("carbon-flex", d.Regional, d.Start, 42, 32)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(first, second) {
+		t.Fatal("same demo seed returned different workloads")
+	}
+	if len(first.Jobs) == 0 || len(first.Jobs) > 32 || first.Horizon != 24*time.Hour {
+		t.Fatalf("demo bounds not applied: jobs=%d horizon=%s", len(first.Jobs), first.Horizon)
+	}
+	for _, job := range first.Jobs {
+		if job.Submit >= first.Horizon {
+			t.Fatalf("job %q falls outside the simulated horizon", job.ID)
+		}
+	}
+	if _, err := DemoWorkload("carbon-flex", d.Regional, d.Start, 42, 65); err == nil {
+		t.Fatal("accepted a job count above the demo cap")
+	}
+	if _, err := DemoWorkload("missing", d.Regional, d.Start, 42, 32); err == nil {
+		t.Fatal("accepted an unknown workload")
+	}
+}
+
 // A controlled, matched workload isolates the objectives from forecasting,
 // queueing and interruptions. The replay below reports their combined effect.
 func TestPoliciesTradeCostAgainstCarbonOnControlledWork(t *testing.T) {

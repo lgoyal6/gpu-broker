@@ -59,6 +59,13 @@ func Load(path string) (*Dataset, error) {
 	if err != nil {
 		return nil, err
 	}
+	return Parse(raw)
+}
+
+// Parse verifies and loads a carbon fixture supplied by the caller.
+// The browser demo uses this to pass the checked-in dataset into Go WASM.
+// Both file and browser loading share the same checksum and shape checks.
+func Parse(raw []byte) (*Dataset, error) {
 	var doc struct {
 		Manifest Manifest        `json:"manifest"`
 		Data     json.RawMessage `json:"data"`
@@ -74,7 +81,7 @@ func Load(path string) (*Dataset, error) {
 	}
 	sum := sha256.Sum256([]byte(pyDumps(generic)))
 	if got := hex.EncodeToString(sum[:]); got != doc.Manifest.SHA256 {
-		return nil, fmt.Errorf("dataset %s: data sha256 %s does not match manifest %s", path, got[:12], doc.Manifest.SHA256)
+		return nil, fmt.Errorf("carbon data sha256 %s does not match manifest %s", got[:12], doc.Manifest.SHA256)
 	}
 	var d data
 	if err := json.Unmarshal(doc.Data, &d); err != nil {
