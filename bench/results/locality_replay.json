@@ -1,0 +1,138 @@
+{
+  "replay": "gpu-broker environment locality tie-break",
+  "deterministic": true,
+  "credential_free": true,
+  "network_calls": 0,
+  "script": {
+    "hosts": [
+      {
+        "hostname": "lab1",
+        "slots": 4
+      },
+      {
+        "hostname": "lab2",
+        "slots": 4
+      },
+      {
+        "hostname": "lab3",
+        "slots": 4
+      }
+    ],
+    "jobs": 240,
+    "arrival_interval_seconds": 200,
+    "digests_in_circulation": [
+      "d0a1b2c3",
+      "d1b2c3d4",
+      "d2c3d4e5",
+      "d3d4e5f6"
+    ],
+    "digest_superseded_at_job": 90,
+    "digest_superseded": {
+      "d0a1b2c3": "d4e5f6a7"
+    },
+    "materialization_cost_seconds": 240.0,
+    "preloaded_environments": {
+      "lab1": [
+        "d0a1b2c3"
+      ],
+      "lab2": [
+        "d1b2c3d4"
+      ],
+      "lab3": []
+    },
+    "hand_evictions": [
+      {
+        "at_job": 60,
+        "hostname": "lab1",
+        "digest": "d0a1b2c3"
+      },
+      {
+        "at_job": 150,
+        "hostname": "lab2",
+        "digest": "d1b2c3d4"
+      }
+    ],
+    "probe_failure_rule": "lab3 for jobs 40-70 inclusive; lab2 on every 23rd job",
+    "unreachable_windows": [
+      {
+        "from_job": 75,
+        "to_job": 95,
+        "hostname": "lab3"
+      }
+    ],
+    "fact_ttl_seconds": 300.0
+  },
+  "baseline": {
+    "arm": "baseline",
+    "locality_tie_break": false,
+    "jobs_placed": 240,
+    "jobs_not_admitted": 0,
+    "not_admitted_job_ids": [],
+    "outcomes": {
+      "placed": 240,
+      "not_admitted": 0
+    },
+    "jobs_with_no_environment": 34,
+    "cold_environment_materializations": 15,
+    "warm_environment_reuses": 191,
+    "simulated_environment_startup_seconds": 3600.0,
+    "placements_by_host": {
+      "lab1": 109,
+      "lab2": 80,
+      "lab3": 51
+    },
+    "placements_by_cost_tier": {
+      "local": 240
+    },
+    "locality_probes_issued": 0,
+    "locality_probe_failures": 0,
+    "locality_facts_reused": 0,
+    "stale_fact_misses": 0
+  },
+  "candidate": {
+    "arm": "candidate",
+    "locality_tie_break": true,
+    "jobs_placed": 240,
+    "jobs_not_admitted": 0,
+    "not_admitted_job_ids": [],
+    "outcomes": {
+      "placed": 240,
+      "not_admitted": 0
+    },
+    "jobs_with_no_environment": 34,
+    "cold_environment_materializations": 15,
+    "warm_environment_reuses": 191,
+    "simulated_environment_startup_seconds": 3600.0,
+    "placements_by_host": {
+      "lab1": 107,
+      "lab2": 81,
+      "lab3": 52
+    },
+    "placements_by_cost_tier": {
+      "local": 240
+    },
+    "locality_probes_issued": 111,
+    "locality_probe_failures": 2,
+    "locality_facts_reused": 0,
+    "stale_fact_misses": 0
+  },
+  "differences": {
+    "comparable": true,
+    "cold_materializations_delta": 0,
+    "warm_reuses_delta": 0,
+    "simulated_environment_startup_seconds_saved": 0.0,
+    "simulated_environment_startup_percent_saved": 0.0,
+    "runnable_job_admission_delta": 0,
+    "cost_tier_changes": 0,
+    "cost_tier_note": "Structurally zero. The tie-break runs inside the local backend's host selection, which is reached only after placement has already chosen a backend and therefore a tier. It cannot move a job between tiers."
+  },
+  "verdict": "tie: the tie-break changed no environment materialization on this script. It also cost nothing -- same jobs admitted, same cost tier, same total environment preparation. No performance claim is available from this run; what it supports is that the mechanism is inert when it has nothing to act on",
+  "limitations": [
+    "Synthetic replay. Hosts are dictionaries and the materialisation cost is a constant in this file, not a measured build.",
+    "No SSH, no GPU, no cloud account, no network, no money.",
+    "Shows the direction and size of the effect on this script only. It is not a measurement of the lab pool and not evidence of production adoption.",
+    "Both arms share one script, but occupancy diverges after the first differing placement, which is the effect being measured rather than a difference in inputs. The run is only reported when both arms still placed every job; see `differences.comparable`.",
+    "Little room to act: three hosts and five digests means the hosts hold most environments most of the time, so only 15 of 206 environment jobs ever meet a cold environment at all. A script with more environments than host-digest slots would give the tie-break more to do, and was not substituted for this one after the result was known.",
+    "The fact cache produced no hits here (`locality_facts_reused` is 0): at 200s between arrivals a digest recurs roughly every 800s, which is past the 300s fact lifetime. Expiry is exercised heavily; reuse is covered by tests/test_locality.py rather than by this replay."
+  ]
+}
