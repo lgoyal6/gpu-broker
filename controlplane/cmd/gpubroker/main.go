@@ -80,7 +80,7 @@ Server roles (one per process; see infra/helm):
   scheduler      single logical scheduler; leader-elected through Postgres
   reconciler     reclaims expired leases and stale reservations; refreshes gauges
   status         read-only public status page (:8081) on the gpub_status role
-  worker-agent   runs dispatched attempts in the sim or kubernetes runtime
+  worker-agent   runs dispatched attempts in sim, kubernetes, or trusted host processes
 
 Offline:
   sim            deterministic policy simulator over named workloads
@@ -94,13 +94,17 @@ Run "gpubroker <role> -h" for flags.
 
 // common flags shared by database-backed roles.
 type common struct {
-	dbURL       string
-	metricsAddr string
+	dbURL         string
+	metricsAddr   string
+	plannerPython string
+	plannerScript string
 }
 
 func (c *common) bind(fs *flag.FlagSet) {
 	fs.StringVar(&c.dbURL, "database-url", os.Getenv("GPUB_DATABASE_URL"), "PostgreSQL URL (env GPUB_DATABASE_URL)")
 	fs.StringVar(&c.metricsAddr, "metrics-addr", ":9090", "Prometheus metrics listen address; empty disables")
+	fs.StringVar(&c.plannerPython, "planner-python", os.Getenv("GPUB_CP_SAT_PYTHON"), "pinned Python executable for bounded CP-SAT scheduling")
+	fs.StringVar(&c.plannerScript, "planner-script", os.Getenv("GPUB_CP_SAT_SCRIPT"), "pinned CP-SAT planner script; both planner flags are required to enable it")
 }
 
 func readSecret(path, env string) ([]byte, error) {
@@ -117,6 +121,9 @@ func readSecret(path, env string) ([]byte, error) {
 // service builds the application with its adapters. One constructor, every
 // dependency visible.
 func service(ctx context.Context, c common, m *metrics.Metrics, objs application.ObjectStore) (*application.Service, *postgres.Store, error) {
+	if (c.plannerPython == "") != (c.plannerScript == "") {
+		return nil, nil, errors.New("--planner-python and --planner-script must be supplied together")
+	}
 	if c.dbURL == "" {
 		return nil, nil, errors.New("--database-url or GPUB_DATABASE_URL is required")
 	}
@@ -149,6 +156,10 @@ func service(ctx context.Context, c common, m *metrics.Metrics, objs application
 		return nil, nil, err
 	}
 	svc := application.NewService(store, application.SystemClock{}, application.RandomIDs{}, signer, objs, m, application.DefaultConfig())
+	if c.plannerPython != "" {
+		svc.CPPlanner = application.ExecCPPlanner{Python: c.plannerPython, Script: c.plannerScript,
+			Timeout: 2 * time.Second, SolverTimeout: 250 * time.Millisecond, Horizon: 45 * time.Minute, Slot: 5 * time.Second}
+	}
 	return svc, store, nil
 }
 

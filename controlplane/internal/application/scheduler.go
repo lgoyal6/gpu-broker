@@ -119,7 +119,12 @@ func (s *Service) Tick(ctx context.Context, epoch int64) (TickResult, error) {
 		}
 		sub := snap
 		sub.Jobs = groups[name]
-		ds := policy.Decide(sub, p)
+		var ds []policy.Decision
+		if name == "cp-sat" {
+			ds = s.cpSatDecisions(ctx, sub)
+		} else {
+			ds = policy.Decide(sub, p)
+		}
 		for _, d := range ds {
 			if d.Action == policy.ActionPlace {
 				consume(&snap, d, groups[name])

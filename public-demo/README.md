@@ -1,10 +1,13 @@
 # GPU Broker recorded policy explorer
 
-The export's `source_commit` identifies its historical source snapshot. Rebase
-merges can change commit IDs without changing source bytes. `--check` always
-requires every current source hash and recorded result to match. It also checks
-the historical Git snapshot when that object is available; otherwise it explicitly
-reports that the historical object could not be verified.
+The export's `source_commit` identifies the source revision used as its base.
+Rebase merges can change commit IDs without changing source bytes. `--check`
+always requires every current source hash and recorded result to match. When the
+base commit exists, it reports whether every exported file also matches that
+commit. A local working tree with uncommitted or newly added source reports
+those differences while still checking its current hashes and results; publish
+only after the release snapshot is committed and the historical check is exact.
+When the commit object is unavailable, the check says so explicitly.
 
 This static demo compares the native Go simulator's eight policies on four synthetic workloads. It is an interactive recording, not the status page, a reimplementation of the scheduler, or a public job API.
 

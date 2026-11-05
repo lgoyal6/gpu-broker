@@ -113,8 +113,8 @@ func (s *Service) Register(ctx context.Context, p Principal, in RegisterRequest)
 		return domain.Worker{}, "", fmt.Errorf("%w: worker needs a dns-like name, 1..64 GPUs, a model and runtimes", ErrInvalid)
 	}
 	for _, r := range c.Runtimes {
-		if r != "sim" && r != "kubernetes" {
-			return domain.Worker{}, "", fmt.Errorf("%w: runtime %q (have sim, kubernetes)", ErrInvalid, r)
+		if r != "sim" && r != "kubernetes" && r != "process" {
+			return domain.Worker{}, "", fmt.Errorf("%w: runtime %q (have sim, kubernetes, process)", ErrInvalid, r)
 		}
 	}
 	var w domain.Worker

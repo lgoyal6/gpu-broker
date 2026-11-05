@@ -1,10 +1,8 @@
 """Google Compute Engine capacity adapter.
 
-This adapter deliberately supports on-demand VM lifecycle only. It uses the
-official Compute Engine SDK for VM control and the existing SSH transport for
-job execution. It does not provide SSM, CloudWatch, spot notices, or checkpoint
-upload parity with EC2; those differences stay visible in configuration and
-runtime behavior.
+This adapter uses the official Compute Engine SDK for VM control and the
+existing SSH transport for job execution. Opt-in Spot mode requires GCS
+checkpoint storage and uses the guest metadata server for interruption notices.
 """
 
 from __future__ import annotations
@@ -42,7 +40,7 @@ class GceConfig:
     """Opt in when the broker cannot SSH over a private VPC path."""
     service_account: str = ""
     service_account_scopes: tuple[str, ...] = (
-        "https://www.googleapis.com/auth/cloud-platform",
+        "https://www.googleapis.com/auth/devstorage.read_write",
     )
     ssh_username: str = "gpu-broker"
     ssh_private_key: str = ""
@@ -52,6 +50,13 @@ class GceConfig:
     accelerator_types: dict[str, str] = field(default_factory=dict)
     accelerator_counts: dict[str, int] = field(default_factory=dict)
     max_instances: dict[str, int] = field(default_factory=dict)
+    spot: bool = False
+    checkpoint_bucket: str = ""
+    checkpoint_prefix: str = "checkpoints"
+    checkpoint_deadline_seconds: int = 20
+    workload_revision: str = ""
+    model_revision: str = ""
+    configuration_sha256: str = ""
 
     def require_launchable(self) -> None:
         missing = [
@@ -97,14 +102,29 @@ class GceConfig:
             for count in self.accelerator_counts.values()
         ):
             raise ConfigError("gce.accelerator_counts values must be positive integers")
+        if self.spot and not self.checkpoint_bucket:
+            raise ConfigError("GCE Spot requires gce.checkpoint_bucket for GCS recovery")
+        if self.spot and not self.workload_revision:
+            raise ConfigError("GCE Spot requires a pinned gce.workload_revision")
+        if self.spot and not self.model_revision:
+            raise ConfigError("GCE Spot requires a pinned gce.model_revision")
+        if self.spot and not self.service_account:
+            raise ConfigError("GCE Spot requires a dedicated gce.service_account with bucket-scoped access")
+        if self.spot and not re.fullmatch(r"[0-9a-f]{64}", self.configuration_sha256):
+            raise ConfigError("GCE Spot requires a 64-character gce.configuration_sha256")
+        if self.checkpoint_deadline_seconds < 1 or self.checkpoint_deadline_seconds > 25:
+            raise ConfigError("GCE Spot checkpoint deadline must be between 1 and 25 seconds")
 
 
 class GceBackend:
-    """On-demand GCE VMs with SSH-based execution and explicit capabilities."""
+    """GCE VMs with SSH execution and optional Spot checkpoint recovery."""
 
     name = "gce"
     currency = Currency.USD
-    tier = "ondemand"
+
+    @property
+    def tier(self) -> str:
+        return "spot" if self.config.spot else "ondemand"
 
     def __init__(
         self,
@@ -145,10 +165,12 @@ class GceBackend:
 
     def launch(self, job: Job) -> Allocation:
         self.config.require_launchable()
-        if job.resumable or job.environment:
+        if job.environment:
             raise BackendError(
-                "GCE adapter does not support broker checkpoints or named container environments"
+                "GCE adapter does not support named container environments"
             )
+        if job.resumable and not self.config.spot:
+            raise BackendError("GCE on-demand mode cannot resume broker checkpoints")
         if not self.supports(job.gpu_type):
             raise BackendError(f"GCE has no {job.gpu_type} machine type configured")
         if self.free_slots(job.gpu_type) < 1:
@@ -158,6 +180,7 @@ class GceBackend:
             "broker-job-id": _label(job.job_id),
             "broker-user": _label(job.user_id),
             "broker-gpu-type": _label(job.gpu_type),
+            "broker-spot": "true" if self.config.spot else "false",
             "broker-launched-at": "t-"
             + self.clock.now().strftime("%Y%m%d%H%M%S").lower(),
         }
@@ -175,7 +198,10 @@ class GceBackend:
                     ),
                 }
             ],
-            "scheduling": {"on_host_maintenance": "TERMINATE", "automatic_restart": True},
+            "scheduling": ({"provisioning_model": "SPOT", "instance_termination_action": "STOP",
+                            "on_host_maintenance": "TERMINATE", "automatic_restart": False}
+                           if self.config.spot else
+                           {"on_host_maintenance": "TERMINATE", "automatic_restart": True}),
             "labels": labels,
             "metadata": {
                 "items": [
@@ -186,7 +212,7 @@ class GceBackend:
             "disks": [
                 {
                     "boot": True,
-                    "auto_delete": True,
+                    "auto_delete": not self.config.spot,
                     "initialize_params": {"source_image": self.config.boot_image},
                 }
             ],
@@ -252,10 +278,26 @@ class GceBackend:
             f"printf '%s\\n' \"$rc\" > {shlex.quote(status_file + '.tmp')} && "
             f"mv {shlex.quote(status_file + '.tmp')} {shlex.quote(status_file)}"
         )
+        command = job.command
+        if self.config.spot:
+            from ..gcp import gce_spot_job_script
+            import hashlib
+
+            command = gce_spot_job_script(
+                command=job.command, bucket=self.config.checkpoint_bucket,
+                prefix=self.config.checkpoint_prefix, job_id=job.job_id,
+                attempt=job.attempts, resume_key=job.checkpoint_key or "",
+                checkpoint_dir="/tmp/gpu-broker/checkpoint",
+                resume_dir="/tmp/gpu-broker/resume",
+                checkpoint_deadline_seconds=self.config.checkpoint_deadline_seconds,
+                workload_revision=self.config.workload_revision,
+                model_revision=self.config.model_revision,
+                configuration_sha256=self.config.configuration_sha256,
+            )
         script = (
             f"mkdir -p {shlex.quote(root)} || exit; "
             f"if mkdir {shlex.quote(root + '/started')} 2>/dev/null; then "
-            f"if ! printf '%s\\n' {shlex.quote(job.command)} > {shlex.quote(command_file)}; then "
+            f"if ! printf '%s\\n' {shlex.quote(command)} > {shlex.quote(command_file)}; then "
             f"rmdir {shlex.quote(root + '/started')}; exit 1; fi; "
             f"nohup bash -lc {shlex.quote(runner)} >> {shlex.quote(output_file)} 2>&1 </dev/null & "
             f"else test -d {shlex.quote(root + '/started')}; fi"
@@ -266,6 +308,11 @@ class GceBackend:
         instance = self._get(handle)
         status = _field(instance, "status", "")
         if status in ("DELETING", "TERMINATED", "STOPPING", "STOPPED"):
+            if self.config.spot:
+                return Observation(
+                    BackendStatus.INTERRUPTED,
+                    detail=f"GCE Spot VM ended in state {status}; reconciliation checks the last complete GCS checkpoint",
+                )
             return Observation(BackendStatus.GONE, detail=f"GCE instance is {status}")
         if status != "RUNNING":
             return Observation(
@@ -299,10 +346,12 @@ class GceBackend:
 
     def validate_launch(self, job: Job) -> str:
         self.config.require_launchable()
-        if job.resumable or job.environment:
+        if job.environment:
             raise BackendError(
-                "GCE adapter does not support broker checkpoints or named container environments"
+                "GCE adapter does not support named container environments"
             )
+        if job.resumable and not self.config.spot:
+            raise BackendError("GCE on-demand mode cannot resume broker checkpoints")
         if not self.supports(job.gpu_type):
             raise BackendError(f"GCE has no {job.gpu_type} machine type configured")
         if self.free_slots(job.gpu_type) < 1:
@@ -316,7 +365,7 @@ class GceBackend:
         instance = self._get(handle)
         if _field(instance, "status", "") == "TERMINATED":
             return "GCE instance is already terminated"
-        return "GCE instance exists; delete permission is not provider-validated"
+        return "GCE instance exists; stop permission is not provider-validated"
 
     def fetch_logs(self, handle: str, after: int = 0) -> list[tuple[str, str]]:
         cached = self._deleted_logs.get(handle)
@@ -342,13 +391,20 @@ class GceBackend:
                 ("broker", f"final GCE log read failed: {exc}")
             ]
         try:
-            self.instances.delete(
-                project=self.config.project, zone=self.config.zone, instance=handle
-            ).result(timeout=300)
+            operation = (
+                self.instances.stop(
+                    project=self.config.project, zone=self.config.zone, instance=handle
+                )
+                if self.config.spot
+                else self.instances.delete(
+                    project=self.config.project, zone=self.config.zone, instance=handle
+                )
+            )
+            operation.result(timeout=300)
         except Exception as exc:
             if "notFound" not in str(exc) and "404" not in str(exc):
                 raise BackendError(
-                    f"could not delete GCE instance {handle}: {exc}"
+                    f"could not {'stop' if self.config.spot else 'delete'} GCE instance {handle}: {exc}"
                 ) from exc
         if log_error:
             return

@@ -1,0 +1,97 @@
+syntax = "proto3";
+
+package gpubroker.v1;
+option go_package = "github.com/lgoyal6/gpu-broker/controlplane/internal/transport/grpcgateway;grpcgateway";
+
+// WorkerGateway carries the existing authenticated worker lifecycle contract
+// over gRPC. The application and HTTP handler remain authoritative.
+service WorkerGateway {
+  rpc RegisterWorker(WorkerRegistrationRequest) returns (LifecycleResponse);
+  rpc Heartbeat(HeartbeatRequest) returns (LifecycleResponse);
+  rpc ClaimDispatches(ClaimDispatchesRequest) returns (LifecycleResponse);
+  rpc AckDispatch(AckDispatchRequest) returns (LifecycleResponse);
+  rpc ReportEvents(ReportEventsRequest) returns (LifecycleResponse);
+  rpc StreamEvents(stream EventChunk) returns (LifecycleResponse);
+  rpc UploadArtifactChunk(UploadArtifactChunkRequest) returns (LifecycleResponse);
+  rpc CompleteArtifact(CompleteArtifactRequest) returns (LifecycleResponse);
+  rpc WatchJob(WatchJobRequest) returns (stream LifecycleResponse);
+  // Temporary compatibility entry point for contract routes not yet promoted
+  // to a typed worker method. New worker calls must use the methods above.
+  rpc Call(HttpRequest) returns (HttpResponse);
+}
+
+message LifecycleResponse {
+  int32 status = 1;
+  map<string, string> headers = 2;
+  bytes body = 3;
+}
+
+message WorkerRegistrationRequest {
+  string name = 1;
+  string gpu_model = 2;
+  int32 gpus = 3;
+  int32 gpu_mem_gb = 4;
+  repeated string runtimes = 5;
+}
+
+message HeartbeatRequest {
+  string state = 1;
+  // Held attempt IDs drive existing adopt/abandon reconciliation.
+  repeated string held_attempts = 2;
+}
+
+message ClaimDispatchesRequest { int32 max = 1; }
+
+message AckDispatchRequest {
+  string attempt_id = 1;
+  // Existing dispatch envelope includes worker/attempt identity and the
+  // lease MAC used by the authoritative acknowledgement handler.
+  bytes dispatch_json = 2;
+}
+
+message ReportEventsRequest {
+  string attempt_id = 1;
+  // Existing event envelope retains per-attempt sequence numbers and
+  // idempotent duplicate handling.
+  bytes events_json = 2;
+}
+
+message EventChunk {
+  string attempt_id = 1;
+  bytes events_json = 2;
+  // Exactly one final chunk closes a bounded batch for durable report.
+  bool final = 3;
+}
+
+message UploadArtifactChunkRequest {
+  string attempt_id = 1;
+  string name = 2;
+  int64 offset = 3;
+  bytes chunk = 4;
+}
+
+message CompleteArtifactRequest {
+  string attempt_id = 1;
+  string name = 2;
+  // The completion route validates the uploaded bytes before publishing the
+  // immutable checkpoint/artifact manifest.
+  string sha256 = 3;
+}
+
+message WatchJobRequest {
+  string job_id = 1;
+  uint32 interval_ms = 2;
+}
+
+message HttpRequest {
+  string method = 1;
+  string path_and_query = 2;
+  map<string, string> headers = 3;
+  bytes body = 4;
+}
+
+message HttpResponse {
+  int32 status = 1;
+  map<string, string> headers = 2;
+  bytes body = 3;
+}

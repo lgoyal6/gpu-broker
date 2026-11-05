@@ -26,6 +26,22 @@ spec:
   ingress:
     - ports: [{ port: 8080 }, { port: 8081 }]
 ---
+# Worker lifecycle RPCs are authenticated by the API and only reachable from
+# the worker-agent pods. The HTTP API remains exposed on its separate port.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-worker-grpc
+  labels: {{- include "gb.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{- include "gb.selector" (dict "root" . "component" "api") | nindent 6 }}
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {{- include "gb.selector" (dict "root" . "component" "agent") | nindent 14 }}
+      ports: [{ port: 8082, protocol: TCP }]
+---
 # Only control-plane roles reach the database.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

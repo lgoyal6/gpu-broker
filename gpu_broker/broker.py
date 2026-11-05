@@ -20,7 +20,7 @@ from .backends.ec2 import Ec2Backend
 from .backends.fake import FakeBackend
 from .backends.gce import GceBackend
 from .backends.local import LocalBackend
-from .checkpoint import CheckpointStore, LocalCheckpointStore, S3CheckpointStore
+from .checkpoint import CheckpointStore, GCSCheckpointStore, LocalCheckpointStore, S3CheckpointStore
 from .local.hosts import HostHealth
 from .local.transport import SshTransport
 from .clock import Clock, SystemClock
@@ -98,6 +98,27 @@ def build_checkpoints(config: BrokerConfig) -> CheckpointStore:
             if clients
             else None
         )  # pragma: no cover
+    if config.checkpoint_store == "gcs":
+        try:
+            from google.cloud import storage
+        except ImportError as exc:  # pragma: no cover - optional dependency
+            raise BrokerError(
+                "GCS checkpoints need google-cloud-storage. Install with: pip install 'gpu-broker[gcp]'"
+            ) from exc
+        try:
+            context = {}
+            if "gce" in config.backends and config.gce.spot:
+                context = {
+                    "workload_revision": config.gce.workload_revision,
+                    "model_revision": config.gce.model_revision,
+                    "configuration_sha256": config.gce.configuration_sha256,
+                }
+            return GCSCheckpointStore(
+                storage.Client(), config.checkpoint_bucket, config.checkpoint_prefix,
+                expected_context=context,
+            )
+        except Exception as exc:
+            raise BrokerError(f"could not initialize the GCS checkpoint client: {exc}") from exc
     root = (
         Path(config.checkpoint_root)
         if config.checkpoint_root
@@ -188,7 +209,8 @@ def build_backends(
             built.append(
                 GceBackend(
                     clock=clock,
-                    config=config.gce,
+                    config=replace(config.gce, checkpoint_bucket=config.checkpoint_bucket,
+                                   checkpoint_prefix=config.checkpoint_prefix),
                     instances=instances,
                     transport=SshTransport(
                         command_timeout=config.gce.ssh_timeout_seconds

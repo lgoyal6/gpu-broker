@@ -40,7 +40,7 @@ def extract(raw):
 
 def export(recording, source_commit=None):
     commit = source_commit or subprocess.check_output(
-        ["git", "log", "-1", "--format=%H", "--", *FILES], cwd=ROOT, text=True).strip()
+        ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     return {
         "schema_version": 1, "source_commit": commit,
         "generation_argv": COMMAND, "generation_cwd": "controlplane",
@@ -61,10 +61,20 @@ def verify_export(actual, recording):
                                cwd=ROOT, capture_output=True).returncode == 0
     if not available:
         return "Historical commit object unavailable; current source hashes and results verified."
+    changed = []
     for source in actual["sources"]:
-        raw = subprocess.check_output(["git", "show", commit + ":" + source["path"]], cwd=ROOT)
+        try:
+            raw = subprocess.check_output(["git", "show", commit + ":" + source["path"]],
+                                          cwd=ROOT, stderr=subprocess.DEVNULL)
+        except subprocess.CalledProcessError:
+            changed.append(source["path"] + " (not present in commit)")
+            continue
         if hashlib.sha256(raw).hexdigest() != source["sha256"]:
-            raise ValueError("historical source snapshot differs: " + source["path"])
+            changed.append(source["path"])
+    if changed:
+        return ("Historical commit does not contain the exact current source snapshot; "
+                "current source hashes and simulation results verified. Differences: " +
+                ", ".join(changed[:5]))
     return "Historical source snapshot, current source hashes and results verified."
 
 

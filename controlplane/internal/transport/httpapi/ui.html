@@ -10,22 +10,52 @@
   body { background:var(--bg); color:var(--fg); font:14px/1.45 system-ui, sans-serif; margin:0 auto; max-width:1100px; padding:16px; }
   h1 { font-size:18px; } table { border-collapse:collapse; width:100%; } td,th { border-bottom:1px solid var(--line); padding:6px 8px; text-align:left; }
   th { color:var(--muted); font-weight:500; } a { color:var(--accent); cursor:pointer; } pre { white-space:pre-wrap; font-size:12px; }
-  input { width:420px; max-width:100%; } .muted { color:var(--muted); }
+  input, textarea, select { max-width:100%; } input { width:280px; } textarea { width:640px; height:70px; }
+  label { display:inline-grid; gap:4px; margin:4px 12px 4px 0; vertical-align:top; }
+  button { margin:4px 6px 4px 0; } .muted { color:var(--muted); }
+  section { border-top:1px solid var(--line); margin-top:20px; padding-top:12px; }
 </style>
 </head>
 <body>
 <h1>gpubroker operator</h1>
 <p class="muted">Your token stays in this tab (sessionStorage). Every request goes to the authenticated API.</p>
 <form id="f"><input id="tok" type="password" placeholder="gpub_user_..."> <button>Use token</button></form>
+<p class="muted">Run and watch use this authenticated control-plane API. A `sim` worker records a simulated attempt and does not execute commands. A Kubernetes worker executes its configured container. Use localhost for this page and worker during CPU-only checks.</p>
+<section>
+<h2>Run a job</h2>
+<form id="run-form">
+  <label>Container image<input id="image" value="busybox:1.36" required></label>
+  <label>GPU model<input id="gpu-model" value="a100"></label>
+  <label>GPUs<input id="gpus" type="number" min="1" max="8" value="1" required></label>
+  <label>Runtime seconds<input id="max-runtime" type="number" min="1" value="120" required></label>
+  <label>Budget cap USD<input id="budget" type="number" min="0.01" step="0.01" value="1.00" required></label>
+  <label>Deadline minutes from now<input id="deadline-minutes" type="number" min="0" value="0"></label>
+  <label>Policy<select id="policy-input"><option value="balanced">balanced</option></select></label>
+  <label style="display:block">Command as a JSON array
+    <textarea id="command">["sim","duration=15s","logs=5","artifact_bytes=256"]</textarea>
+  </label>
+  <button type="submit">Submit run</button>
+</form>
+<p id="run-status" class="muted" role="status" aria-live="polite">Use token before submitting.</p>
+</section>
 <h2>Pools</h2><table id="pools"></table>
 <h2>Jobs</h2><table id="jobs"></table>
+<button id="watch" type="button" disabled>Watch selected job</button>
+<button id="cancel" type="button" disabled>Cancel selected job</button>
+<button id="stop-watch" type="button" disabled>Stop watching</button>
+<p id="watch-status" class="muted" role="status" aria-live="polite"></p>
 <h2 id="dh"></h2><pre id="detail"></pre>
+<h2>Attempt artifacts</h2><ul id="artifacts"></ul>
 <script>
 const tok = () => sessionStorage.getItem("gpub_token") || "";
-document.getElementById("f").onsubmit = (e) => { e.preventDefault(); sessionStorage.setItem("gpub_token", document.getElementById("tok").value); load(); };
-async function api(path) {
-  const r = await fetch(path, { headers: { Authorization: "Bearer " + tok() } });
-  if (!r.ok) throw new Error((await r.json()).error.message);
+let selectedJob = "";
+let watchTimer = 0;
+let isWatching = false;
+function authHeaders(extra={}) { return { Authorization: "Bearer " + tok(), ...extra }; }
+async function api(path, options={}) {
+  const r = await fetch(path, { ...options, headers: authHeaders(options.headers || {}) });
+  if (!r.ok) { let detail; try { detail=(await r.json()).error; } catch { detail={message:r.statusText}; } throw new Error(detail.message || detail.code || r.statusText); }
+  if (r.status === 204) return null;
   return r.json();
 }
 function row(cells) { const tr = document.createElement("tr"); for (const c of cells) { const td = document.createElement("td"); if (c instanceof Node) td.appendChild(c); else td.textContent = c; tr.appendChild(td); } return tr; }
@@ -34,13 +64,91 @@ async function load() {
   const pools = await api("/v1/pools"); const pt = document.getElementById("pools"); pt.replaceChildren(row(["pool","region","workers","free/total GPUs","$/GPU-h"]));
   for (const p of pools.pools) pt.appendChild(row([p.name, p.region, p.workers_ready, p.gpus_free + "/" + p.gpus_total, p.price_usd_per_gpu_hour]));
   const jobs = await api("/v1/jobs?limit=100"); const jt = document.getElementById("jobs"); jt.replaceChildren(row(["job","state","gpus","policy","submitted"]));
-  for (const j of jobs.jobs) { const a = document.createElement("a"); a.textContent = j.id; a.onclick = () => show(j.id); jt.appendChild(row([a, j.state, j.gpus, j.policy, j.submitted_at])); }
+  for (const j of jobs.jobs) { const a = document.createElement("a"); a.textContent = j.id; a.href="#job"; a.onclick = (event) => { event.preventDefault(); if(watchTimer)clearTimeout(watchTimer);watchTimer=0;isWatching=false;selectedJob=j.id;updateActions();show(j.id); }; jt.appendChild(row([a, j.state, j.gpus, j.policy, j.submitted_at])); }
+  const policies = await api("/v1/policies"); const select=document.getElementById("policy-input");
+  select.replaceChildren(...policies.policies.map(p=>{const option=document.createElement("option");option.value=p.name;option.textContent=p.name;return option;}));
+  select.value=policies.default;
 }
 async function show(id) {
   const [d, dec] = await Promise.all([api("/v1/jobs/" + id), api("/v1/jobs/" + id + "/decisions")]);
   document.getElementById("dh").textContent = id;
-  document.getElementById("detail").textContent = JSON.stringify({ job: d, decisions: dec.decisions }, null, 2);
+  const logs = await api("/v1/jobs/" + id + "/logs?limit=1000");
+  const recovery = d.transitions.filter(t=>t.from==="RUNNING" && t.to==="QUEUED");
+  document.getElementById("detail").textContent = JSON.stringify({
+    evidence_class:d.job.evidence_class, job:d.job, budget:d.budget,
+    transitions:d.transitions, decisions:dec.decisions, logs:logs.lines,
+    recovery_trace:{requeues:recovery, artifacts:d.artifacts,
+      note:"A requeue is an observed retry transition. Checkpoint artifacts are listed by attempt; this view does not claim a checkpoint was consumed by the next attempt."}
+  }, null, 2);
+  const list=document.getElementById("artifacts"); list.replaceChildren();
+  for (const artifact of d.artifacts) {
+    const item=document.createElement("li");
+    item.textContent=artifact.name+" - attempt "+artifact.attempt_id+" - "+artifact.state+" - "+artifact.size+" bytes - SHA-256 "+artifact.sha256+" ";
+    if (artifact.state==="COMPLETE" && artifact.size<=64*1024*1024) {
+      const button=document.createElement("button"); button.type="button"; button.textContent="Download and verify";
+      button.onclick=()=>downloadArtifact(id,artifact).catch(error=>{document.getElementById("watch-status").textContent="Artifact download failed: "+error;});
+      item.append(button);
+    } else if (artifact.size>64*1024*1024) item.append(document.createTextNode("Download limit: 64 MiB."));
+    list.append(item);
+  }
+  updateActions(d.job.state);
 }
+async function downloadArtifact(jobId,artifact) {
+  const chunks=[]; let offset=0;
+  while(offset<artifact.size) {
+    const response=await fetch("/v1/jobs/"+encodeURIComponent(jobId)+"/artifacts/"+
+      encodeURIComponent(artifact.attempt_id)+"/"+encodeURIComponent(artifact.name)+"?offset="+offset,
+      {headers:authHeaders()});
+    if (!response.ok) throw new Error("artifact fetch returned "+response.status);
+    if (response.headers.get("X-Artifact-State")!=="COMPLETE") throw new Error("artifact manifest is not complete");
+    const part=await response.blob(); if (!part.size) throw new Error("artifact ended before its declared size");
+    chunks.push(part); offset+=part.size;
+  }
+  const content=new Blob(chunks); const bytes=await content.arrayBuffer();
+  const digest=[...new Uint8Array(await crypto.subtle.digest("SHA-256",bytes))].map(value=>value.toString(16).padStart(2,"0")).join("");
+  if (digest!==artifact.sha256) throw new Error("downloaded artifact SHA-256 does not match its manifest");
+  const link=document.createElement("a"); link.href=URL.createObjectURL(content);
+  link.download=artifact.name.split("/").pop()||"artifact"; link.click(); URL.revokeObjectURL(link.href);
+  document.getElementById("watch-status").textContent="Downloaded and verified "+artifact.name+" for attempt "+artifact.attempt_id+".";
+}
+function updateActions(state="") {
+  document.getElementById("watch").disabled=!selectedJob;
+  document.getElementById("cancel").disabled=!selectedJob || ["SUCCEEDED","FAILED","CANCELLED","EXPIRED"].includes(state);
+  document.getElementById("stop-watch").disabled=!isWatching;
+}
+async function watchOnce(id) {
+  if (selectedJob!==id || !isWatching) return;
+  try {
+    const d=await api("/v1/jobs/"+id);
+    await show(id);
+    if (!isWatching || selectedJob!==id) return;
+    const terminal=["SUCCEEDED","FAILED","CANCELLED","EXPIRED"].includes(d.job.state);
+    document.getElementById("watch-status").textContent=""+d.job.state+" - "+(terminal?"watch complete":"refreshing every 2 seconds");
+    if (!terminal && selectedJob===id && isWatching) watchTimer=setTimeout(()=>watchOnce(id),2000);
+    else { watchTimer=0;isWatching=false;updateActions(d.job.state); }
+  } catch(e) { watchTimer=0;isWatching=false;document.getElementById("watch-status").textContent=String(e);updateActions(); }
+}
+document.getElementById("f").onsubmit = (e) => { e.preventDefault(); sessionStorage.setItem("gpub_token", document.getElementById("tok").value); load().catch(err=>document.getElementById("detail").textContent=String(err)); };
+document.getElementById("run-form").onsubmit = async (e) => {
+  e.preventDefault();
+  try {
+    const command=JSON.parse(document.getElementById("command").value);
+    if (!Array.isArray(command) || command.length===0 || command.some(value=>typeof value!=="string")) throw new Error("Command must be a non-empty JSON array of strings.");
+    const minutes=Number(document.getElementById("deadline-minutes").value);
+    const request={image:document.getElementById("image").value,command,
+      gpus:Number(document.getElementById("gpus").value),gpu_model:document.getElementById("gpu-model").value,
+      runtime:command[0]==="sim"?"sim":"kubernetes",max_runtime_s:Number(document.getElementById("max-runtime").value),
+      budget_cap_usd:Number(document.getElementById("budget").value),policy:document.getElementById("policy-input").value};
+    if (minutes>0) request.deadline=new Date(Date.now()+minutes*60000).toISOString();
+    const created=await api("/v1/jobs",{method:"POST",headers:{"Content-Type":"application/json","Idempotency-Key":crypto.randomUUID()},body:JSON.stringify(request)});
+    if(watchTimer)clearTimeout(watchTimer);watchTimer=0;isWatching=false;
+    selectedJob=created.id; document.getElementById("run-status").textContent="Submitted "+created.id+" ("+created.evidence_class+").";
+    await load(); await show(created.id); updateActions(created.state);
+  } catch(err) { document.getElementById("run-status").textContent="Run failed: "+err; }
+};
+document.getElementById("watch").onclick=()=>{if(watchTimer)clearTimeout(watchTimer);isWatching=true;watchTimer=0;updateActions();watchOnce(selectedJob);};
+document.getElementById("stop-watch").onclick=()=>{if(watchTimer)clearTimeout(watchTimer);watchTimer=0;isWatching=false;document.getElementById("watch-status").textContent="Watch stopped.";updateActions();};
+document.getElementById("cancel").onclick=async()=>{try{const job=await api("/v1/jobs/"+selectedJob+"/cancel",{method:"POST",headers:{"Idempotency-Key":crypto.randomUUID(),"Content-Type":"application/json"},body:"{}"});document.getElementById("watch-status").textContent="Cancel requested: "+job.state;await load();await show(selectedJob);}catch(err){document.getElementById("watch-status").textContent="Cancel failed: "+err;}};
 load().catch(e => { document.getElementById("detail").textContent = String(e); });
 </script>
 </body>
