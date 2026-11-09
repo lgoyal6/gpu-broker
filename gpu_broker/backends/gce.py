@@ -281,7 +281,6 @@ class GceBackend:
         command = job.command
         if self.config.spot:
             from ..gcp import gce_spot_job_script
-            import hashlib
 
             command = gce_spot_job_script(
                 command=job.command, bucket=self.config.checkpoint_bucket,
