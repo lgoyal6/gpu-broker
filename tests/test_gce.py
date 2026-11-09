@@ -334,8 +334,9 @@ def shell_rig(rig, tmp_path):
     def run_shell(host, command, timeout=None):
         command = command.replace("/tmp/gpu-broker/jobs", str(tmp_path))
         result = subprocess.run(
-            ["bash", "-c", command], capture_output=True, text=True, timeout=timeout
+            ["bash", "-x", "-c", command], capture_output=True, text=True, timeout=timeout
         )
+        print(result.stderr, end="")  # Pytest retains the claim trace on failure.
         return CommandResult(result.returncode, result.stdout, result.stderr)
 
     transport.run = run_shell
