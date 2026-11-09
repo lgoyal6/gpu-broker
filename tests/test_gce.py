@@ -224,7 +224,7 @@ def test_spot_launch_stops_and_retains_boot_disk(rig):
     backend.launch(job())
     resource = instances.inserted[-1]["instance_resource"]
     assert resource.scheduling.instance_termination_action == "STOP"
-    assert resource.scheduling.max_run_duration is None
+    assert not compute_v1.Scheduling.pb(resource.scheduling).HasField("max_run_duration")
     assert not resource.disks[0].auto_delete
     backend.terminate(resource.name, "test")
     assert instances.stopped[-1]["instance"] == resource.name
