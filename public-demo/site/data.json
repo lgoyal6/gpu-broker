@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "source_commit": "14cc56ee292fd81acfb4da9cffc122e02b4877c0",
+  "source_commit": "790ba8e4204b9d2cf4d1f38456d2cebc695dd6d4",
   "generation_argv": [
     "go",
     "run",
@@ -64,6 +64,10 @@
       "sha256": "86fc343c9cebaed2e0fd63d5bc388cbcbee87ab640a764668d513a94307ab722"
     },
     {
+      "path": "controlplane/internal/domain/policy/predictor.go",
+      "sha256": "eaad0c9670b3dea588d568feed4c59633bbfc55fa31a64f0c2b7fa65782b5428"
+    },
+    {
       "path": "controlplane/internal/domain/policy/snapshot.go",
       "sha256": "877889b720c11ab5961f8df2c4eae79ba0a9712aa82f01de469914d65a43ea05"
     },
@@ -97,7 +101,7 @@
     },
     {
       "path": "public-demo/export.py",
-      "sha256": "c28cc484eca4b43a0f4ccaff8efe36e2d62f4ea912821429b2e0c7ef4ffae2d2"
+      "sha256": "48f737846335457107b242021131949833fd9cedce0ea48b5500155b35c8fa93"
     },
     {
       "path": "public-demo/site/app.js",

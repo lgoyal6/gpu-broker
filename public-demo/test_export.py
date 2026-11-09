@@ -2,6 +2,7 @@
 import importlib.util
 import json
 from pathlib import Path
+import subprocess
 import unittest
 from unittest.mock import patch
 
@@ -33,6 +34,16 @@ class RecordingTest(unittest.TestCase):
         with patch.object(exporter.subprocess, "run") as run:
             run.return_value.returncode = 1
             self.assertIn("unavailable", exporter.verify_export(changed, exporter.extract(self.raw)))
+
+    def test_worktree_only_sources_are_reported_without_breaking_current_hash_checks(self):
+        commit = "a" * 40
+        actual = exporter.export(self.data, source_commit=commit)
+        with patch.object(exporter.subprocess, "run") as run, patch.object(
+                exporter.subprocess, "check_output", side_effect=subprocess.CalledProcessError(128, ["git", "show"])):
+            run.return_value.returncode = 0
+            message = exporter.verify_export(actual, self.data)
+        self.assertIn("does not contain the exact current source snapshot", message)
+        self.assertIn("current source hashes and simulation results verified", message)
 
     def test_carbon_label_does_not_turn_a_loss_into_savings(self):
         rows = {row["policy"]: row for row in self.data["results"] if row["workload"] == "carbon-flex"}
