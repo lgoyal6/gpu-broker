@@ -1,0 +1,27 @@
+{{- if not .Values.workerTLS.existingSecret }}
+{{- $name := include "gb.workerTLSSecretName" . }}
+{{- $old := lookup "v1" "Secret" .Release.Namespace $name }}
+{{- $data := dict }}
+{{- if $old }}
+{{- $data = $old.data }}
+{{- else }}
+{{- $service := printf "%s-api" .Release.Name }}
+{{- $ca := genCA (printf "%s-worker-ca" .Release.Name) 365 }}
+{{- $names := list $service (printf "%s.%s" $service .Release.Namespace) (printf "%s.%s.svc" $service .Release.Namespace) (printf "%s.%s.svc.cluster.local" $service .Release.Namespace) }}
+{{- $server := genSignedCert $service nil $names 365 $ca }}
+{{- $client := genSignedCert (printf "%s-agent" .Release.Name) nil nil 365 $ca }}
+{{- $data = dict "ca.crt" ($ca.Cert | b64enc) "server.crt" ($server.Cert | b64enc) "server.key" ($server.Key | b64enc) "client.crt" ($client.Cert | b64enc) "client.key" ($client.Key | b64enc) }}
+{{- end }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $name }}
+  labels: {{- include "gb.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+type: Opaque
+data:
+  {{- range $key := list "ca.crt" "server.crt" "server.key" "client.crt" "client.key" }}
+  {{ $key }}: {{ required (printf "worker TLS secret is missing %s" $key) (index $data $key) | quote }}
+  {{- end }}
+{{- end }}

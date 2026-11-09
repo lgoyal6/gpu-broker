@@ -33,6 +33,9 @@ spec:
           args:
             - worker-agent
             - --grpc-target={{ .Release.Name }}-api:8082
+            - --grpc-ca-file=/worker-tls/ca.crt
+            - --grpc-client-cert-file=/worker-tls/client.crt
+            - --grpc-client-key-file=/worker-tls/client.key
             - --bootstrap-token-file=/secrets/bootstrap-{{ .Values.agent.pool }}
             - --dispatch-key-file=/secrets/dispatch-key
             - --runtime={{ .Values.agent.runtime }}
@@ -55,7 +58,16 @@ spec:
           {{- include "gb.containerSecurity" . | nindent 10 }}
           volumeMounts:
             - { name: secrets, mountPath: /secrets, readOnly: true }
+            - { name: worker-tls, mountPath: /worker-tls, readOnly: true }
             - { name: state, mountPath: /state }
       volumes:
         {{- include "gb.secretVolume" . | nindent 8 }}
+        - name: worker-tls
+          secret:
+            secretName: {{ include "gb.workerTLSSecretName" . }}
+            defaultMode: 0440
+            items:
+              - { key: ca.crt, path: ca.crt }
+              - { key: client.crt, path: client.crt }
+              - { key: client.key, path: client.key }
         - { name: state, emptyDir: {} }
