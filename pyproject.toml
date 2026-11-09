@@ -30,6 +30,10 @@ web = [
 ]
 gcp = [
     "google-cloud-compute>=1.19,<2",
+    "google-cloud-storage>=2.18,<4",
+]
+planner = [
+    "ortools>=9.10,<10",
 ]
 dev = [
     "gpu-broker[web]",

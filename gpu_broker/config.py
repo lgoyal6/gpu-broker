@@ -185,8 +185,7 @@ class BrokerConfig:
     checkpoint_deadline_seconds: float = 90.0
 
     checkpoint_store: str = "local"
-    """`local` or `s3`. Spot resumption needs `s3`: a preempted job comes back
-    on a different machine, and a directory on the old one is gone with it."""
+    """`local`, `s3`, or `gcs`. Remote Spot capacity requires cloud storage."""
     checkpoint_root: str = ""
     """Where a local store keeps things. Empty means alongside the database."""
     checkpoint_bucket: str = ""
@@ -253,12 +252,12 @@ class BrokerConfig:
             raise ConfigError("no backends configured: nothing could ever run")
         if not self.placement_order:
             raise ConfigError("placement_order is empty: nothing could ever be placed")
-        if self.checkpoint_store not in ("local", "s3"):
+        if self.checkpoint_store not in ("local", "s3", "gcs"):
             raise ConfigError(
-                f"unknown checkpoint_store {self.checkpoint_store!r}. Known: local, s3"
+                f"unknown checkpoint_store {self.checkpoint_store!r}. Known: local, s3, gcs"
             )
-        if self.checkpoint_store == "s3" and not self.checkpoint_bucket:
-            raise ConfigError("checkpoint_store is 's3' but checkpoint_bucket is not set")
+        if self.checkpoint_store in ("s3", "gcs") and not self.checkpoint_bucket:
+            raise ConfigError(f"checkpoint_store is {self.checkpoint_store!r} but checkpoint_bucket is not set")
         # Keyed on a spot backend actually existing, not on the tier appearing
         # in the order. The default order lists `spot` so that turning it on is
         # one line, and a tier with no backend behind it is simply skipped.
@@ -269,6 +268,11 @@ class BrokerConfig:
                 "its checkpoint has to be somewhere both can reach. Set "
                 "checkpoint_store to 's3', or drop 'ec2-spot' from backends"
             )
+        if "gce" in self.backends and self.gce.spot:
+            if self.checkpoint_store != "gcs":
+                raise ConfigError("GCE Spot requires checkpoint_store='gcs'")
+            if not self.checkpoint_bucket:
+                raise ConfigError("GCE Spot requires checkpoint_bucket for GCS recovery")
         if self.idle_min_samples < 1:
             raise ConfigError("idle_min_samples must be at least 1")
         if not 0 <= self.idle_threshold_percent <= 100:
