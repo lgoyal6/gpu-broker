@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -19,21 +20,30 @@ import (
 	"github.com/lgoyal6/gpu-broker/controlplane/internal/application"
 	"github.com/lgoyal6/gpu-broker/controlplane/internal/domain"
 	"github.com/lgoyal6/gpu-broker/controlplane/internal/transport/client"
+	"github.com/lgoyal6/gpu-broker/controlplane/internal/transport/grpcgateway"
+	"google.golang.org/grpc"
 )
 
 type Config struct {
-	APIURL         string
-	BootstrapToken string
-	Name           string
-	GPUModel       string
-	GPUs           int
-	GPUMemGB       int
-	StateDir       string
-	DispatchKey    []byte
-	Heartbeat      time.Duration
-	MaxConcurrent  int
-	Interruption   InterruptionSource
+	APIURL          string
+	GRPCTarget      string
+	GRPCTLS         *tls.Config
+	BootstrapToken  string
+	Name            string
+	GPUModel        string
+	GPUs            int
+	GPUMemGB        int
+	StateDir        string
+	DispatchKey     []byte
+	Heartbeat       time.Duration
+	MaxConcurrent   int
+	Interruption    InterruptionSource
+	PreRegistration PreRegistrationHook
 }
+
+// PreRegistrationHook runs once before the worker is visible to the control
+// plane, so required durable state can be verified and restored first.
+type PreRegistrationHook interface{ Prepare(context.Context) error }
 
 type InterruptionSource interface {
 	Interrupted(context.Context, time.Time) (bool, error)
@@ -43,19 +53,21 @@ type InterruptionSource interface {
 // runtime: the worker credential, the spool of unsent events, and the set
 // of attempts the runtime is running.
 type Agent struct {
-	cfg     Config
-	rt      Runtime
-	clock   application.Clock
-	log     *slog.Logger
-	signer  *application.LeaseSigner
-	api     *client.ClientWithResponses
-	token   string
-	worker  domain.WorkerID
-	mu      sync.Mutex
-	running map[domain.AttemptID]Spec
-	stopped map[domain.AttemptID]domain.AttemptOutcome
-	start   map[domain.AttemptID]time.Time
-	drain   bool
+	cfg              Config
+	rt               Runtime
+	clock            application.Clock
+	log              *slog.Logger
+	signer           *application.LeaseSigner
+	api              *client.ClientWithResponses
+	grpcConn         *grpc.ClientConn
+	token            string
+	worker           domain.WorkerID
+	mu               sync.Mutex
+	running          map[domain.AttemptID]Spec
+	stopped          map[domain.AttemptID]domain.AttemptOutcome
+	start            map[domain.AttemptID]time.Time
+	drain            bool
+	recoveryPrepared bool
 }
 
 func New(cfg Config, rt Runtime, clock application.Clock, log *slog.Logger) (*Agent, error) {
@@ -77,16 +89,42 @@ func New(cfg Config, rt Runtime, clock application.Clock, log *slog.Logger) (*Ag
 }
 
 func (a *Agent) client(token string) (*client.ClientWithResponses, error) {
-	return client.NewClientWithResponses(a.cfg.APIURL, client.WithHTTPClient(&http.Client{Timeout: 30 * time.Second}),
+	baseURL := a.cfg.APIURL
+	transport := http.RoundTripper(http.DefaultTransport)
+	if a.cfg.GRPCTarget != "" {
+		if a.grpcConn == nil {
+			conn, err := grpcgateway.DialTLS(context.Background(), a.cfg.GRPCTarget, a.cfg.GRPCTLS)
+			if err != nil {
+				return nil, err
+			}
+			a.grpcConn = conn
+		}
+		baseURL = "http://gpubroker"
+		transport = grpcgateway.RoundTripper{Client: grpcgateway.NewWorkerGatewayClient(a.grpcConn)}
+	}
+	return client.NewClientWithResponses(baseURL, client.WithHTTPClient(&http.Client{Timeout: 30 * time.Second, Transport: transport}),
 		client.WithRequestEditorFn(func(_ context.Context, r *http.Request) error {
 			r.Header.Set("Authorization", "Bearer "+token)
 			return nil
 		}))
 }
 
+func (a *Agent) Close() error {
+	if a.grpcConn != nil {
+		return a.grpcConn.Close()
+	}
+	return nil
+}
+
 // Register loads the worker credential from the state directory, or
 // registers with the bootstrap token and stores it (0600) before using it.
 func (a *Agent) Register(ctx context.Context) error {
+	if !a.recoveryPrepared && a.cfg.PreRegistration != nil {
+		if err := a.cfg.PreRegistration.Prepare(ctx); err != nil {
+			return fmt.Errorf("pre-registration recovery: %w", err)
+		}
+		a.recoveryPrepared = true
+	}
 	path := filepath.Join(a.cfg.StateDir, "worker-token")
 	idPath := filepath.Join(a.cfg.StateDir, "worker-id")
 	if b, err := os.ReadFile(path); err == nil && len(b) > 0 {

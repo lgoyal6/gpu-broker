@@ -100,6 +100,17 @@ func orderKey(j domain.Job, now time.Time, shares map[domain.TenantID]float64, p
 		return OrderKey{Score: round6(-slack.Hours()), Terms: []string{
 			fmt.Sprintf("slack %s", slack.Round(time.Second)),
 		}}
+	case OrderDeadlineShortest:
+		// Shortest predicted runtime goes first. Deadline pressure breaks ties
+		// so a short-deadline job is preferred when runtimes are equal.
+		deadlineScore := 0.0
+		if j.Deadline != nil {
+			deadlineScore = -j.Deadline.Sub(now).Hours() / 1000
+		}
+		return OrderKey{Score: round6(-j.MaxRuntime.Hours() + deadlineScore), Terms: []string{
+			fmt.Sprintf("runtime %s", j.MaxRuntime.Round(time.Second)),
+			fmt.Sprintf("deadline score %.6f", deadlineScore),
+		}}
 	}
 	return OrderKey{}
 }

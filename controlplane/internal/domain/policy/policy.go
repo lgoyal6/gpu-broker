@@ -14,10 +14,11 @@ import (
 type Ordering string
 
 const (
-	OrderFIFO          Ordering = "fifo"
-	OrderPriorityAging Ordering = "priority-aging"
-	OrderFairShare     Ordering = "fair-share"
-	OrderDeadline      Ordering = "deadline"
+	OrderFIFO             Ordering = "fifo"
+	OrderPriorityAging    Ordering = "priority-aging"
+	OrderFairShare        Ordering = "fair-share"
+	OrderDeadline         Ordering = "deadline"
+	OrderDeadlineShortest Ordering = "deadline-shortest"
 )
 
 // Weights scale the normalised score components. They need not sum to 1;
@@ -81,7 +82,7 @@ func (p Policy) Validate() error {
 		return fmt.Errorf("policy needs a name and a version")
 	}
 	switch p.Ordering {
-	case OrderFIFO, OrderPriorityAging, OrderFairShare, OrderDeadline:
+	case OrderFIFO, OrderPriorityAging, OrderFairShare, OrderDeadline, OrderDeadlineShortest:
 	default:
 		return fmt.Errorf("policy %s: unknown ordering %q", p.Name, p.Ordering)
 	}
@@ -123,6 +124,10 @@ func Builtins() map[string]Policy {
 			FairShare: defaultFairShare, StarvationGuard: 6 * time.Hour, Weights: Weights{Fit: 1}},
 		{Name: "deadline-first", Version: "deadline-first@v2", Ordering: OrderDeadline,
 			StarvationGuard: 6 * time.Hour, Weights: Weights{Fit: 0.3, Deadline: 1}},
+		{Name: "deadline-shortest", Version: "deadline-shortest@v1", Ordering: OrderDeadlineShortest,
+			StarvationGuard: 6 * time.Hour, Weights: Weights{Fit: 1, Deadline: 0.5}},
+		{Name: "cp-sat", Version: "cp-sat@v1", Ordering: OrderDeadlineShortest,
+			StarvationGuard: 6 * time.Hour, Weights: Weights{Fit: 1, Deadline: 0.5}},
 		{Name: "lowest-cost", Version: "lowest-cost@v2", Ordering: OrderFairShare,
 			FairShare: defaultFairShare, StarvationGuard: 6 * time.Hour,
 			Weights: Weights{Fit: 0.2, Cost: 1}},

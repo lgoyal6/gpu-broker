@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"regexp"
@@ -22,14 +24,18 @@ import (
 	"k8s.io/client-go/rest"
 
 	"github.com/lgoyal6/gpu-broker/controlplane/internal/adapters/carbon"
+	"github.com/lgoyal6/gpu-broker/controlplane/internal/adapters/gcscheckpoint"
 	"github.com/lgoyal6/gpu-broker/controlplane/internal/adapters/metrics"
 	"github.com/lgoyal6/gpu-broker/controlplane/internal/adapters/postgres"
 	"github.com/lgoyal6/gpu-broker/controlplane/internal/adapters/spot"
 	"github.com/lgoyal6/gpu-broker/controlplane/internal/agent"
 	"github.com/lgoyal6/gpu-broker/controlplane/internal/application"
 	"github.com/lgoyal6/gpu-broker/controlplane/internal/domain"
+	"github.com/lgoyal6/gpu-broker/controlplane/internal/transport/grpcgateway"
 	"github.com/lgoyal6/gpu-broker/controlplane/internal/transport/httpapi"
 	"github.com/lgoyal6/gpu-broker/controlplane/internal/transport/status"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 )
 
 var roleName = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,62}$`)
@@ -137,10 +143,18 @@ func runAPI(ctx context.Context, args []string, log *slog.Logger) error {
 	var c common
 	c.bind(fs)
 	addr := fs.String("addr", ":8080", "listen address")
+	grpcAddr := fs.String("grpc-addr", os.Getenv("GPUB_GRPC_ADDR"), "worker lifecycle gRPC listen address; empty disables")
+	grpcCert := fs.String("grpc-tls-cert-file", "", "worker gateway server certificate")
+	grpcKey := fs.String("grpc-tls-key-file", "", "worker gateway server private key")
+	grpcCA := fs.String("grpc-client-ca-file", "", "CA allowed to issue worker client certificates")
 	var objects artifactStoreOptions
 	objects.bind(fs)
 	demo := fs.Bool("demo", false, "enable POST /v1/demo/seed (seeded, labelled data; never in production)")
 	_ = fs.Parse(args)
+	grpcTLS, err := grpcgateway.ServerTLSConfig(*grpcAddr, grpcgateway.TLSFiles{CAFile: *grpcCA, CertFile: *grpcCert, KeyFile: *grpcKey})
+	if err != nil {
+		return err
+	}
 	m := metrics.New()
 	objectStore, err := objects.build(ctx)
 	if err != nil {
@@ -156,6 +170,27 @@ func runAPI(ctx context.Context, args []string, log *slog.Logger) error {
 	}
 	serveMetrics(ctx, c.metricsAddr, m, log)
 	api := httpapi.New(svc, log, m, store.SchemaReady, *demo)
+	var grpcServer *grpc.Server
+	if *grpcAddr != "" {
+		listener, err := net.Listen("tcp", *grpcAddr)
+		if err != nil {
+			return fmt.Errorf("listen worker gRPC: %w", err)
+		}
+		gateway := &grpcgateway.Server{Handler: api.Handler()}
+		options := []grpc.ServerOption{grpc.MaxRecvMsgSize(10 << 20), grpc.MaxSendMsgSize(10 << 20)}
+		if grpcTLS != nil {
+			options = append(options, grpc.Creds(credentials.NewTLS(grpcTLS)))
+		}
+		grpcServer = grpc.NewServer(options...)
+		grpcgateway.RegisterWorkerGatewayServer(grpcServer, gateway)
+		go func() {
+			if err := grpcServer.Serve(listener); err != nil && ctx.Err() == nil {
+				log.Error("worker gRPC server stopped", "err", err)
+			}
+		}()
+		log.Info("worker gRPC listening", "addr", *grpcAddr)
+		defer grpcServer.GracefulStop()
+	}
 	return serve(ctx, &http.Server{Addr: *addr, Handler: api.Handler(), ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout: 60 * time.Second, WriteTimeout: 60 * time.Second}, log)
 }
@@ -319,26 +354,43 @@ func runStatus(ctx context.Context, args []string, log *slog.Logger) error {
 func runAgent(ctx context.Context, args []string, log *slog.Logger) error {
 	fs := flag.NewFlagSet("worker-agent", flag.ExitOnError)
 	apiURL := fs.String("api-url", os.Getenv("GPUB_API_URL"), "control-plane API URL")
+	grpcTarget := fs.String("grpc-target", os.Getenv("GPUB_GRPC_TARGET"), "worker lifecycle gRPC target; when set, agent RPCs use gRPC")
+	grpcCA := fs.String("grpc-ca-file", "", "CA allowed to issue the gateway server certificate")
+	grpcCert := fs.String("grpc-client-cert-file", "", "worker client certificate")
+	grpcKey := fs.String("grpc-client-key-file", "", "worker client private key")
+	grpcName := fs.String("grpc-server-name", "", "expected gateway certificate name when using a tunnel")
 	bootFile := fs.String("bootstrap-token-file", "", "pool bootstrap token file (or env GPUB_BOOTSTRAP_TOKEN)")
 	keyFile := fs.String("dispatch-key-file", os.Getenv("GPUB_DISPATCH_KEY_FILE"), "dispatch MAC key file (or env GPUB_DISPATCH_KEY)")
 	name := fs.String("name", os.Getenv("NODE_NAME"), "worker name (defaults to $NODE_NAME)")
 	model := fs.String("gpu-model", "a100", "declared GPU model")
 	gpus := fs.Int("gpus", 1, "declared GPU count")
 	mem := fs.Int("gpu-mem-gb", 80, "declared GPU memory per GPU")
-	runtime := fs.String("runtime", "sim", "sim | kubernetes")
-	stateDir := fs.String("state-dir", "/var/lib/gpubroker-agent", "credential, spool and sim state")
+	runtime := fs.String("runtime", "sim", "sim | kubernetes | process (trusted host execution)")
+	stateDir := fs.String("state-dir", "/var/lib/gpubroker-agent", "credential, spool and runtime state")
 	ns := fs.String("namespace", "gpub-jobs", "kubernetes namespace for attempt Jobs")
 	gpuRes := fs.String("gpu-resource", "", `extended resource to request, e.g. "nvidia.com/gpu"; empty in Kind`)
 	cpu := fs.String("cpu", "1", "per-attempt CPU limit")
 	memLimit := fs.String("memory", "1Gi", "per-attempt memory limit")
-	heartbeat := fs.Duration("heartbeat", 10*time.Second, "heartbeat interval (must be well under the 45s lease)")
-	spotProvider := fs.String("spot-provider", "none", "none | aws (EC2 IMDSv2 spot interruption notices)")
+	heartbeat := fs.Duration("heartbeat", 2*time.Second, "heartbeat interval (must be well under the 45s lease)")
+	spotProvider := fs.String("spot-provider", "none", "none | aws | gcp (provider metadata interruption notices)")
+	checkpointBucket := fs.String("checkpoint-bucket", os.Getenv("GPUB_CHECKPOINT_BUCKET"), "GCS bucket for replacement checkpoint restore")
+	checkpointPrefix := fs.String("checkpoint-prefix", os.Getenv("GPUB_CHECKPOINT_PREFIX"), "GCS object prefix for checkpoints")
+	recoveryJobID := fs.String("checkpoint-job-id", os.Getenv("GPUB_CHECKPOINT_JOB_ID"), "job to restore before registration on a replacement")
+	recoverySource := fs.String("checkpoint-source-revision", os.Getenv("GPUB_CHECKPOINT_SOURCE_REVISION"), "pinned source revision expected in the checkpoint")
+	recoveryWorkloadSHA := fs.String("checkpoint-workload-sha256", os.Getenv("GPUB_CHECKPOINT_WORKLOAD_SHA256"), "pinned workload SHA-256 expected in the checkpoint")
+	requireCheckpointRestore := fs.Bool("require-checkpoint-restore", false, "fail closed before worker registration unless a compatible checkpoint restores")
 	_ = fs.Parse(args)
+	grpcTLS, err := grpcgateway.ClientTLSConfig(*grpcTarget, grpcgateway.TLSFiles{CAFile: *grpcCA, CertFile: *grpcCert, KeyFile: *grpcKey, ServerName: *grpcName})
+	if err != nil {
+		return err
+	}
 	var interruption agent.InterruptionSource
 	switch *spotProvider {
 	case "none":
 	case "aws":
 		interruption = spot.AWS{Client: imds.New(imds.Options{EnableFallback: aws.FalseTernary})}
+	case "gcp":
+		interruption = spot.GCE{}
 	default:
 		return fmt.Errorf("unknown spot provider %q", *spotProvider)
 	}
@@ -355,6 +407,8 @@ func runAgent(ctx context.Context, args []string, log *slog.Logger) error {
 	switch *runtime {
 	case "sim":
 		rt, err = agent.NewSimRuntime(*stateDir+"/sim", clock)
+	case "process":
+		rt, err = agent.NewProcessRuntime(*stateDir + "/process")
 	case "kubernetes":
 		cfg, cerr := rest.InClusterConfig()
 		if cerr != nil {
@@ -375,8 +429,15 @@ func runAgent(ctx context.Context, args []string, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	a, err := agent.New(agent.Config{APIURL: *apiURL, BootstrapToken: string(boot), Name: *name, GPUModel: *model, GPUs: *gpus,
-		GPUMemGB: *mem, StateDir: *stateDir, DispatchKey: key, Heartbeat: *heartbeat, Interruption: interruption}, rt, clock, log)
+	if *grpcTarget == "" && *apiURL == "" {
+		return errors.New("--api-url or --grpc-target is required")
+	}
+	preRegistration, err := checkpointRecovery(rt, *requireCheckpointRestore, *checkpointBucket, *checkpointPrefix, *recoveryJobID, *recoverySource, *recoveryWorkloadSHA)
+	if err != nil {
+		return err
+	}
+	a, err := agent.New(agent.Config{APIURL: *apiURL, GRPCTarget: *grpcTarget, GRPCTLS: grpcTLS, BootstrapToken: string(boot), Name: *name, GPUModel: *model, GPUs: *gpus,
+		GPUMemGB: *mem, StateDir: *stateDir, DispatchKey: key, Heartbeat: *heartbeat, Interruption: interruption, PreRegistration: preRegistration}, rt, clock, log)
 	if err != nil {
 		return err
 	}
@@ -398,7 +459,35 @@ func runAgent(ctx context.Context, args []string, log *slog.Logger) error {
 	if err := a.Recover(ctx); err != nil {
 		log.Warn("recovery incomplete", "err", err)
 	}
+	defer a.Close()
 	return a.Run(ctx)
+}
+
+func checkpointRecovery(rt agent.Runtime, required bool, bucket, prefix, jobID, sourceRevision, workloadSHA256 string) (agent.PreRegistrationHook, error) {
+	if !required {
+		return nil, nil
+	}
+	if bucket == "" || jobID == "" || sourceRevision == "" || !isSHA256(workloadSHA256) {
+		return nil, errors.New("required checkpoint restore needs bucket, job ID, source revision, and workload SHA-256")
+	}
+	resumePath, ok := rt.(interface{ ResumeDirectory(domain.JobID) string })
+	if !ok {
+		return nil, errors.New("required checkpoint restore needs the process runtime")
+	}
+	return gcscheckpoint.Recovery{
+		Client: gcscheckpoint.Client{Tokens: gcscheckpoint.MetadataTokenSource{}},
+		Bucket: bucket, Prefix: prefix, JobID: jobID,
+		Destination: resumePath.ResumeDirectory(domain.JobID(jobID)), Required: true,
+		ExpectedContext: map[string]string{"job_id": jobID, "source_revision": sourceRevision, "workload_sha256": workloadSHA256},
+	}, nil
+}
+
+func isSHA256(value string) bool {
+	if len(value) != 64 {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
 }
 
 func fileExists(p string) bool {

@@ -58,8 +58,15 @@ Set `GPUB_TOKEN` to the returned token and `GPUB_API_URL` to
 ```
 
 The operator interface is at `/ui`; its data requests require the tenant
-token. The public status
-service uses a database role allowed to read only two aggregate views.
+token. It submits jobs with a generated idempotency key, exposes budget and
+deadline controls, watches live job state/logs/decisions, and sends cancel
+requests. It also shows transition history and checkpoint artifacts by attempt;
+downloads are chunked and SHA-256 checked. A requeue is displayed as a retry,
+not proof that a checkpoint was consumed. A worker using `--runtime=sim` is a
+CPU-only simulator that records synthetic events and does not execute the
+command. Use a localhost Kubernetes worker to exercise real container
+execution. The public status service uses a database role allowed to read only
+two aggregate views.
 Use [the real GPU deployment runbook](../docs/runbooks/deploy-gpu.md) for the
 optional hardware profile.
 
