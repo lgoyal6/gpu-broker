@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import subprocess
 import shlex
+import shutil
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
@@ -247,7 +248,7 @@ def test_gce_readiness_start_is_idempotent_and_status_is_observed(rig):
     assert backend.poll(allocation.handle).status is BackendStatus.READY
     backend.start(allocation.handle, job())
     assert (
-        "mkdir /tmp/gpu-broker/jobs/01234567-89ab-cdef-0123-456789abcdef/started"
+        "set -C; : > /tmp/gpu-broker/jobs/01234567-89ab-cdef-0123-456789abcdef/dispatch-claim"
         in transport.commands[-1][1]
     )
     assert "nohup bash -lc" in transport.commands[-1][1]
@@ -372,14 +373,38 @@ def test_start_preparation_failure_releases_dispatch_claim(shell_rig):
     assert backend.poll(allocation.handle).status is BackendStatus.COMPLETED
 
 
-def test_parallel_start_shell_dispatches_command_once(shell_rig):
+@pytest.mark.parametrize("unreliable_mkdir", [False, True])
+def test_parallel_start_shell_dispatches_command_once(shell_rig, monkeypatch, unreliable_mkdir):
     backend, allocation, candidate, root, effects = shell_rig
+    if unreliable_mkdir:
+        # Reproduce the Ubuntu mkdir race by treating EEXIST as success.
+        real_mkdir = shutil.which("mkdir")
+        bin_dir = root.parent / "bin"
+        bin_dir.mkdir()
+        wrapper = bin_dir / "mkdir"
+        wrapper.write_text(
+            "#!/bin/bash\n"
+            f"{shlex.quote(real_mkdir)} \"$@\"\n"
+            "rc=$?\n"
+            "test -d \"${@: -1}\" && exit 0\n"
+            "exit \"$rc\"\n"
+        )
+        wrapper.chmod(0o755)
+        monkeypatch.setenv("PATH", f"{bin_dir}:/usr/bin:/bin")
     with ThreadPoolExecutor(max_workers=2) as pool:
         list(pool.map(lambda _: backend.start(allocation.handle, candidate), range(8)))
     wait_for_shell_exit(root)
     backend.start(allocation.handle, candidate)  # Retry after completion.
     assert effects.read_text().splitlines() == ["run"]
     assert backend.poll(allocation.handle).status is BackendStatus.COMPLETED
+
+
+def test_start_preserves_existing_directory_claim(shell_rig):
+    backend, allocation, candidate, root, effects = shell_rig
+    (root / "started").mkdir(parents=True)
+    backend.start(allocation.handle, candidate)
+    assert not effects.exists()
+    assert not (root / "command.sh").exists()
 
 
 @pytest.mark.parametrize(

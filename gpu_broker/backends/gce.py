@@ -273,6 +273,7 @@ class GceBackend:
         command_file = f"{root}/command.sh"
         output_file = f"{root}/output.log"
         status_file = f"{root}/exit-code"
+        claim_file = f"{root}/dispatch-claim"
         runner = (
             f"bash {shlex.quote(command_file)}; rc=$?; "
             f"printf '%s\\n' \"$rc\" > {shlex.quote(status_file + '.tmp')} && "
@@ -293,13 +294,18 @@ class GceBackend:
                 model_revision=self.config.model_revision,
                 configuration_sha256=self.config.configuration_sha256,
             )
+        # Bash noclobber uses O_EXCL. Some mkdir implementations report success
+        # to concurrent losers, so a directory alone cannot arbitrate dispatch.
         script = (
             f"mkdir -p {shlex.quote(root)} || exit; "
-            f"if mkdir {shlex.quote(root + '/started')} 2>/dev/null; then "
-            f"if ! printf '%s\\n' {shlex.quote(command)} > {shlex.quote(command_file)}; then "
-            f"rmdir {shlex.quote(root + '/started')}; exit 1; fi; "
+            f"if test -d {shlex.quote(root + '/started')}; then exit 0; fi; "
+            f"if (set -C; : > {shlex.quote(claim_file)}) 2>/dev/null; then "
+            f"if ! mkdir -p {shlex.quote(root + '/started')} || "
+            f"! printf '%s\\n' {shlex.quote(command)} > {shlex.quote(command_file)}; then "
+            f"rmdir {shlex.quote(root + '/started')}; "
+            f"rm -f {shlex.quote(claim_file)}; exit 1; fi; "
             f"nohup bash -lc {shlex.quote(runner)} >> {shlex.quote(output_file)} 2>&1 </dev/null & "
-            f"else test -d {shlex.quote(root + '/started')}; fi"
+            f"else test -f {shlex.quote(claim_file)}; fi"
         )
         self._run(host, script, "start GCE job")
 
