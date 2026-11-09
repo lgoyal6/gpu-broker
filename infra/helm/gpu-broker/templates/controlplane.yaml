@@ -51,6 +51,9 @@ spec:
             - api
             - --addr=:8080
             - --grpc-addr=:8082
+            - --grpc-tls-cert-file=/worker-tls/server.crt
+            - --grpc-tls-key-file=/worker-tls/server.key
+            - --grpc-client-ca-file=/worker-tls/ca.crt
             - --object-store={{ $.Values.api.objectStorage.kind }}
             {{- if eq $.Values.api.objectStorage.kind "fs" }}
             - --object-dir={{ $.Values.api.objectStorage.directory }}
@@ -132,11 +135,24 @@ spec:
           {{- include "gb.containerSecurity" $ | nindent 10 }}
           volumeMounts:
             - { name: secrets, mountPath: /secrets, readOnly: true }
+            {{- if eq $c "api" }}
+            - { name: worker-tls, mountPath: /worker-tls, readOnly: true }
+            {{- end }}
             {{- if and (eq $c "api") (eq $.Values.api.objectStorage.kind "fs") }}
             - { name: objects, mountPath: /objects }
             {{- end }}
       volumes:
         {{- include "gb.secretVolume" $ | nindent 8 }}
+        {{- if eq $c "api" }}
+        - name: worker-tls
+          secret:
+            secretName: {{ include "gb.workerTLSSecretName" $ }}
+            defaultMode: 0440
+            items:
+              - { key: ca.crt, path: ca.crt }
+              - { key: server.crt, path: server.crt }
+              - { key: server.key, path: server.key }
+        {{- end }}
         {{- if and (eq $c "api") (eq $.Values.api.objectStorage.kind "fs") }}
         - name: objects
           persistentVolumeClaim: { claimName: {{ $.Release.Name }}-objects }

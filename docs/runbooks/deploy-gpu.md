@@ -15,6 +15,13 @@ chart, runtime and protocol with declared GPUs.
 - A NetworkPolicy-enforcing CNI.
 - The image pushed by digest.
 
+Worker RPCs use mutual TLS. The chart generates a release-specific CA and
+server/client certificates valid for 365 days, retaining the Secret across
+upgrades and rollbacks. Set `workerTLS.existingSecret` to use managed credentials
+with keys `ca.crt`, `server.crt`, `server.key`, `client.crt`, and `client.key`.
+The server certificate must cover `<release>-api`. Rotate credentials before
+expiry and restart the API and agent pods to load replacement certificates.
+
 ## Steps
 
 ```bash

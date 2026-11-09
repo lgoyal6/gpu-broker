@@ -45,6 +45,7 @@ dump() {
   echo "--- diagnostics" >&2
   kubectl -n "$NS" get pods -o wide >&2 || true
   kubectl -n gpub-jobs get jobs,pods -o wide >&2 || true
+  kubectl -n "$NS" logs deploy/gb-api --all-pods=true --tail=30 >&2 || true
   kubectl -n "$NS" logs deploy/gb-scheduler --tail=30 >&2 || true
   kubectl -n "$NS" logs ds/gb-agent --tail=30 >&2 || true
 }
@@ -63,6 +64,7 @@ cleanup() {
   if [[ "${KEEP:-0}" != 1 || "$KUBECONFIG" != "$BIN/"* ]]; then rm -rf "$BIN"; fi
 }
 trap cleanup EXIT
+trap dump ERR
 
 if kind get clusters 2>/dev/null | grep -qx "$CLUSTER"; then fail "refusing to reuse existing cluster $CLUSTER"; fi
 [[ ! -e "$KUBECONFIG" ]] || fail "refusing to overwrite existing kubeconfig $KUBECONFIG"

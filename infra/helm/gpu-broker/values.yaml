@@ -23,6 +23,11 @@ secrets:
   # ExternalSecret can provide it instead (externalSecrets below).
   existingSecret: ""
 
+workerTLS:
+  # Keys: ca.crt, server.crt, server.key, client.crt, client.key.
+  # A release-scoped CA and certificates are generated once when empty.
+  existingSecret: ""
+
 externalSecrets:
   enabled: false
   secretStoreRef: { name: "", kind: ClusterSecretStore }

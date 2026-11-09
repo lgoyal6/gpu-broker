@@ -19,6 +19,7 @@ app.kubernetes.io/component: {{ .component }}
 
 {{- define "gb.secretName" -}}{{ default (printf "%s-secrets" .Release.Name) .Values.secrets.existingSecret }}{{- end -}}
 {{- define "gb.dbSecretName" -}}{{ default (printf "%s-db" .Release.Name) .Values.database.existingSecret }}{{- end -}}
+{{- define "gb.workerTLSSecretName" -}}{{ default (printf "%s-worker-tls" .Release.Name) .Values.workerTLS.existingSecret }}{{- end -}}
 
 {{/* Env shared by every database role. */}}
 {{- define "gb.dbEnv" -}}
