@@ -32,7 +32,7 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
             - worker-agent
-            - --api-url=http://{{ .Release.Name }}-api:8080
+            - --grpc-target={{ .Release.Name }}-api:8082
             - --bootstrap-token-file=/secrets/bootstrap-{{ .Values.agent.pool }}
             - --dispatch-key-file=/secrets/dispatch-key
             - --runtime={{ .Values.agent.runtime }}

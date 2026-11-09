@@ -73,14 +73,15 @@ func (NopObserver) Fenced()                                                     
 // Service is constructed once per process with every dependency explicit.
 // It holds no mutable state of its own; everything durable is in the store.
 type Service struct {
-	Store    Store
-	Clock    Clock
-	IDs      IDGen
-	Signer   *LeaseSigner
-	Objects  ObjectStore
-	Obs      Observer
-	Cfg      Config
-	Policies map[string]policy.Policy
+	Store     Store
+	Clock     Clock
+	IDs       IDGen
+	Signer    *LeaseSigner
+	Objects   ObjectStore
+	Obs       Observer
+	Cfg       Config
+	Policies  map[string]policy.Policy
+	CPPlanner PlacementPlanner
 }
 
 func NewService(store Store, clock Clock, ids IDGen, signer *LeaseSigner, objects ObjectStore, obs Observer, cfg Config) *Service {

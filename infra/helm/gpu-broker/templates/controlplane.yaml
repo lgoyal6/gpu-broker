@@ -50,6 +50,7 @@ spec:
           args:
             - api
             - --addr=:8080
+            - --grpc-addr=:8082
             - --object-store={{ $.Values.api.objectStorage.kind }}
             {{- if eq $.Values.api.objectStorage.kind "fs" }}
             - --object-dir={{ $.Values.api.objectStorage.directory }}
@@ -91,6 +92,7 @@ spec:
             - { name: metrics, containerPort: 9090 }
             {{- if eq $c "api" }}
             - { name: http, containerPort: 8080 }
+            - { name: grpc, containerPort: 8082 }
             {{- else if eq $c "status" }}
             - { name: http, containerPort: 8081 }
             {{- end }}
@@ -167,6 +169,7 @@ spec:
   selector: {{- include "gb.selector" (dict "root" . "component" "api") | nindent 4 }}
   ports:
     - { name: http, port: 8080, targetPort: http }
+    - { name: grpc, port: 8082, targetPort: grpc }
     - { name: metrics, port: 9090, targetPort: metrics }
 ---
 apiVersion: v1

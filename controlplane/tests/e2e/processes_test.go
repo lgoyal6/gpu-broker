@@ -81,6 +81,59 @@ func processEnv(e *testkit.Env) []string {
 	return []string{"GPUB_DATABASE_URL=" + e.URL, "GPUB_DISPATCH_KEY=" + string(testkit.DispatchKey), "GOMAXPROCS=2"}
 }
 
+// TestProcessRuntimeThroughGoService sends a real API dispatch over mutually
+// authenticated gRPC to a worker using the native host-process runtime. It is
+// opt-in because it launches real local processes and requires PostgreSQL.
+func TestProcessRuntimeThroughGoService(t *testing.T) {
+	if os.Getenv("GPUB_PROCESS_TESTS") != "1" {
+		t.Skip("set GPUB_PROCESS_TESTS=1 to run native process integration")
+	}
+	_ = testkit.DatabaseURL(t)
+	binary := filepath.Join(t.TempDir(), "gpubroker")
+	build := exec.Command("go", "build", "-race", "-p", "2", "-o", binary, "../../cmd/gpubroker")
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build: %v: %s", err, output)
+	}
+	e := testkit.New(t)
+	e.Svc.Clock = application.SystemClock{}
+	user, _ := e.Tenant("native-process", 100)
+	boot, err := e.Svc.UpsertPool(e.Ctx, domain.Pool{ID: "pool-process", Name: "pool-process", Kind: domain.PoolSimulated,
+		Region: "local", PriceMicroUSDPerGPUHour: 1_000_000})
+	e.Must(err)
+	grpcListener, err := net.Listen("tcp", "127.0.0.1:0")
+	e.Must(err)
+	grpcTarget := grpcListener.Addr().String()
+	e.Must(grpcListener.Close())
+	httpListener, err := net.Listen("tcp", "127.0.0.1:0")
+	e.Must(err)
+	apiAddr := httpListener.Addr().String()
+	e.Must(httpListener.Close())
+	objects, state := t.TempDir(), t.TempDir()
+	serverTLS, workerTLS := testkit.MutualTLSFiles(t)
+	env := append(processEnv(e), "GPUB_BOOTSTRAP_TOKEN="+boot)
+	api := launch(t, binary, env, "api", "--addr="+apiAddr, "--grpc-addr="+grpcTarget, "--object-dir="+objects, "--metrics-addr=",
+		"--grpc-tls-cert-file="+serverTLS.CertFile, "--grpc-tls-key-file="+serverTLS.KeyFile, "--grpc-client-ca-file="+serverTLS.CAFile)
+	_ = api
+	worker := launch(t, binary, env, "worker-agent", "--grpc-target="+grpcTarget, "--name=process-node", "--state-dir="+state, "--heartbeat=100ms", "--runtime=process",
+		"--grpc-ca-file="+workerTLS.CAFile, "--grpc-client-cert-file="+workerTLS.CertFile, "--grpc-client-key-file="+workerTLS.KeyFile, "--grpc-server-name="+workerTLS.ServerName)
+	_ = worker
+	eventually(t, "native process worker registration", func() bool {
+		return e.QueryInt(`SELECT count(*) FROM workers WHERE state = 'READY' AND 'process' = ANY(runtimes)`) == 1
+	})
+	marker := filepath.Join(t.TempDir(), "child-finished")
+	job, err := e.Svc.Submit(e.Ctx, user, application.SubmitRequest{Image: "local/process-test:1", Command: []string{"/bin/sh", "-c", "printf finished > \"$1\"", "sh", marker},
+		GPUs: 1, GPUModel: "a100", MaxRuntime: 20 * time.Second, MaxAttempts: 1, Policy: "fifo", Runtime: "process"}, "native-process-test")
+	e.Must(err)
+	e.Tick()
+	eventually(t, "native process job completion", func() bool { return e.Job(user, job.ID).State == domain.JobSucceeded })
+	if data, err := os.ReadFile(marker); err != nil || string(data) != "finished" {
+		t.Fatalf("native process output: data=%q err=%v", data, err)
+	}
+	if n := e.QueryInt(`SELECT count(*) FROM attempt_events WHERE attempt_id = (SELECT id FROM job_attempts WHERE job_id = $1) AND kind = 'exit'`, job.ID); n != 1 {
+		t.Fatalf("terminal event count = %d, want 1", n)
+	}
+}
+
 // Opt in because this builds and kills real processes. PostgreSQL is required;
 // the worker runtime remains the declared filesystem-backed simulator.
 func TestLocalProcessRecovery(t *testing.T) {
@@ -216,7 +269,7 @@ func TestLocalProcessRecovery(t *testing.T) {
 	t.Run("agent-and-api-sigkill", func(t *testing.T) {
 		e := testkit.New(t)
 		e.Svc.Clock = application.SystemClock{}
-		user, _ := e.Tenant("process-tenant", 100)
+		user, tenant := e.Tenant("process-tenant", 100)
 		boot, err := e.Svc.UpsertPool(e.Ctx, domain.Pool{ID: "pool-a", Name: "pool-a", Kind: domain.PoolSimulated, Region: "london", PriceMicroUSDPerGPUHour: 1_000_000})
 		e.Must(err)
 		listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -224,10 +277,16 @@ func TestLocalProcessRecovery(t *testing.T) {
 		addr := listener.Addr().String()
 		e.Must(listener.Close())
 		url := "http://" + addr
+		grpcListener, err := net.Listen("tcp", "127.0.0.1:0")
+		e.Must(err)
+		grpcTarget := grpcListener.Addr().String()
+		e.Must(grpcListener.Close())
 		env := append(processEnv(e), "GPUB_BOOTSTRAP_TOKEN="+boot)
 		objects, state := t.TempDir(), t.TempDir()
+		serverTLS, workerTLS := testkit.MutualTLSFiles(t)
 		startAPI := func() *child {
-			p := launch(t, binary, env, "api", "--addr="+addr, "--object-dir="+objects, "--metrics-addr=")
+			p := launch(t, binary, env, "api", "--addr="+addr, "--grpc-addr="+grpcTarget, "--object-dir="+objects, "--metrics-addr=",
+				"--grpc-tls-cert-file="+serverTLS.CertFile, "--grpc-tls-key-file="+serverTLS.KeyFile, "--grpc-client-ca-file="+serverTLS.CAFile)
 			eventually(t, "API readiness", func() bool {
 				client := http.Client{Timeout: 200 * time.Millisecond}
 				response, err := client.Get(url + "/readyz")
@@ -240,7 +299,8 @@ func TestLocalProcessRecovery(t *testing.T) {
 			return p
 		}
 		startAgent := func(name, directory string) *child {
-			return launch(t, binary, env, "worker-agent", "--api-url="+url, "--name="+name, "--state-dir="+directory, "--heartbeat=100ms", "--runtime=sim")
+			return launch(t, binary, env, "worker-agent", "--grpc-target="+grpcTarget, "--name="+name, "--state-dir="+directory, "--heartbeat=100ms", "--runtime=sim",
+				"--grpc-ca-file="+workerTLS.CAFile, "--grpc-client-cert-file="+workerTLS.CertFile, "--grpc-client-key-file="+workerTLS.KeyFile, "--grpc-server-name="+workerTLS.ServerName)
 		}
 		api := startAPI()
 		agent := startAgent("node-1", state)
@@ -261,6 +321,19 @@ func TestLocalProcessRecovery(t *testing.T) {
 		if e.QueryInt(`SELECT count(*) FROM job_attempts WHERE job_id = $1`, job) != 1 || e.QueryInt(`SELECT count(*) FROM workers`) != 1 {
 			t.Fatal("agent restart duplicated the attempt or worker")
 		}
+		cancelID := submit("2m")
+		cancelReq, err := http.NewRequest(http.MethodPost, url+"/v1/jobs/"+string(cancelID)+"/cancel", strings.NewReader(`{}`))
+		e.Must(err)
+		cancelReq.Header.Set("Authorization", "Bearer "+tenant.Token)
+		cancelReq.Header.Set("Content-Type", "application/json")
+		cancelReq.Header.Set("Idempotency-Key", "grpc-process-cancel")
+		cancelResp, err := (&http.Client{Timeout: time.Second}).Do(cancelReq)
+		e.Must(err)
+		_ = cancelResp.Body.Close()
+		if cancelResp.StatusCode != http.StatusOK {
+			t.Fatalf("cancel status = %d", cancelResp.StatusCode)
+		}
+		eventually(t, "gRPC worker cancellation acknowledgement", func() bool { return e.Job(user, cancelID).State == domain.JobCancelled })
 		job = submit("2s")
 		api.kill(t)
 		time.Sleep(3 * time.Second)
