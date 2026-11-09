@@ -21,8 +21,10 @@ had in exchange for one you cannot use.
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import json
 import shutil
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
@@ -291,4 +293,154 @@ class S3CheckpointStore:
             for item in response.get("Contents", []):
                 self.client.delete_object(Bucket=self.bucket, Key=item["Key"])
             removed += 1
+        return removed
+
+
+class GCSCheckpointStore:
+    """GCS checkpoints with checksum-bound artifacts and manifest-last commit."""
+
+    def __init__(self, client: Any, bucket: str, prefix: str = "checkpoints",
+                 expected_context: dict[str, str] | None = None) -> None:
+        self.client = client
+        self.bucket_name = bucket
+        self.bucket = client.bucket(bucket)
+        self.prefix = prefix.strip("/")
+        self.expected_context = dict(expected_context or {})
+
+    def _base(self, job_id: str, step: int) -> str:
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", job_id):
+            raise CheckpointError("job id contains unsupported GCS object-key characters")
+        return "/".join(part for part in
+                         (self.prefix, job_id, f"step-{step:012d}") if part)
+
+    def _blob(self, key: str):
+        return self.bucket.blob(key)
+
+    def put(self, job_id: str, step: int, directory: Path, at: dt.datetime) -> CheckpointRef:
+        source = Path(directory)
+        if not source.is_dir():
+            raise CheckpointError(f"nothing to checkpoint: {source} is not a directory")
+        base = self._base(job_id, step)
+        artifacts = []
+        total = 0
+        try:
+            for path in sorted(source.rglob("*")):
+                if not path.is_file():
+                    continue
+                relative = path.relative_to(source).as_posix()
+                if relative.startswith("/") or ".." in Path(relative).parts or relative == MANIFEST:
+                    raise CheckpointError(f"unsafe checkpoint artifact path: {relative}")
+                body = path.read_bytes()
+                digest = hashlib.sha256(body).hexdigest()
+                self._blob(f"{base}/{relative}").upload_from_string(body)
+                artifacts.append({"name": relative, "bytes": len(body), "sha256": digest})
+                total += len(body)
+            if not artifacts:
+                raise CheckpointError("checkpoint directory contains no artifact files")
+            manifest = {
+                "schema": "gpu-broker.gcs-checkpoint/v1", "job_id": job_id,
+                "step": step, "written_at": to_iso(at), "files": artifacts,
+                "bytes": total, "context": self.expected_context,
+            }
+            # Complete manifest is the commit record and is written only after
+            # every immutable, content-addressed artifact is present.
+            self._blob(f"{base}/{MANIFEST}").upload_from_string(
+                json.dumps(manifest, sort_keys=True).encode(), content_type="application/json")
+        except Exception as exc:
+            if isinstance(exc, CheckpointError):
+                raise
+            raise CheckpointError(f"could not upload GCS checkpoint {step}: {exc}") from exc
+        return CheckpointRef(job_id, step, base, at,
+                             tuple(sorted(item["name"] for item in artifacts)), total)
+
+    def latest(self, job_id: str) -> CheckpointRef | None:
+        self._base(job_id, 0)
+        prefix = self._base(job_id, 0).rsplit("/", 1)[0] + "/"
+        best = None
+        try:
+            for blob in self.bucket.list_blobs(prefix=prefix):
+                name = getattr(blob, "name", "")
+                if not name.endswith(f"/{MANIFEST}"):
+                    continue
+                try:
+                    data = json.loads(blob.download_as_bytes())
+                    if data.get("schema") != "gpu-broker.gcs-checkpoint/v1" or data.get("job_id") != job_id:
+                        continue
+                    context = data.get("context", {})
+                    if any(context.get(key) != value for key, value in self.expected_context.items()):
+                        continue
+                    ref = CheckpointRef(job_id, int(data["step"]), name.rsplit("/", 1)[0],
+                                        from_iso(data["written_at"]),
+                                        tuple(sorted(item["name"] for item in data["files"])),
+                                        int(data["bytes"]))
+                except (ValueError, KeyError, TypeError):
+                    continue
+                if best is None or ref.step > best.step:
+                    best = ref
+        except Exception as exc:
+            raise CheckpointError(f"could not list GCS checkpoints: {exc}") from exc
+        return best
+
+    def fetch(self, ref: CheckpointRef, directory: Path) -> None:
+        target = Path(directory)
+        manifest_key = f"{ref.key}/{MANIFEST}"
+        try:
+            manifest = json.loads(self._blob(manifest_key).download_as_bytes())
+            if (manifest.get("schema") != "gpu-broker.gcs-checkpoint/v1" or
+                    manifest.get("job_id") != ref.job_id or int(manifest.get("step", -1)) != ref.step):
+                raise CheckpointError("GCS checkpoint manifest identity mismatch")
+            context = manifest.get("context", {})
+            if any(context.get(key) != value for key, value in self.expected_context.items()):
+                raise CheckpointError("GCS checkpoint context is incompatible with this workload")
+            manifest_files = tuple(sorted(item["name"] for item in manifest["files"]))
+            if manifest_files != tuple(sorted(ref.files)):
+                raise CheckpointError("GCS checkpoint manifest file list differs from reference")
+            staged: list[tuple[Path, bytes]] = []
+            for item in manifest["files"]:
+                name = str(item["name"])
+                if name.startswith("/") or ".." in Path(name).parts:
+                    raise CheckpointError("GCS checkpoint contains an unsafe artifact path")
+                body = self._blob(f"{ref.key}/{name}").download_as_bytes()
+                if len(body) != int(item["bytes"]) or hashlib.sha256(body).hexdigest() != item["sha256"]:
+                    raise CheckpointError(f"GCS checkpoint artifact integrity mismatch: {name}")
+                staged.append((target / name, body))
+            target.mkdir(parents=True, exist_ok=True)
+            for path, body in staged:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(body)
+        except CheckpointError:
+            raise
+        except Exception as exc:
+            raise CheckpointError(f"could not restore GCS checkpoint {ref.step}: {exc}") from exc
+
+    def prune(self, job_id: str, keep: int = 2) -> int:
+        self._base(job_id, 0)
+        prefix = self._base(job_id, 0).rsplit("/", 1)[0] + "/"
+        complete = {}
+        step_prefixes = {}
+        parent_prefix = prefix.rstrip("/")
+        blobs = list(self.bucket.list_blobs(prefix=prefix))
+        for blob in blobs:
+            name = getattr(blob, "name", "")
+            match = re.match(r"^" + re.escape(prefix) + r"step-(\d{12})/", name)
+            if match:
+                base = f"{parent_prefix}/" if parent_prefix else ""
+                step_prefixes[int(match.group(1))] = base + f"step-{match.group(1)}"
+            if not name.endswith(f"/{MANIFEST}"):
+                continue
+            try:
+                data = json.loads(blob.download_as_bytes())
+                if data.get("schema") == "gpu-broker.gcs-checkpoint/v1" and data.get("job_id") == job_id:
+                    complete[int(data["step"])] = name.rsplit("/", 1)[0]
+            except (ValueError, KeyError, TypeError):
+                continue
+        protected = set(sorted(complete)[-max(0, keep):]) if keep else set()
+        removed = 0
+        for step, base in step_prefixes.items():
+            if step in protected:
+                continue
+            for blob in self.bucket.list_blobs(prefix=f"{base}/"):
+                blob.delete()
+            if step in complete:
+                removed += 1
         return removed

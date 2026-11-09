@@ -42,6 +42,7 @@ class Instances:
         self.items = {}
         self.inserted = []
         self.deleted = []
+        self.stopped = []
         self.insert_operation = Operation()
         self.insert_error = None
 
@@ -67,6 +68,10 @@ class Instances:
     def delete(self, **kwargs):
         self.deleted.append(kwargs)
         self.items.pop(kwargs["instance"], None)
+        return Operation()
+
+    def stop(self, **kwargs):
+        self.stopped.append(kwargs)
         return Operation()
 
 
@@ -210,11 +215,27 @@ def test_launch_uses_compute_instance_resource_and_waits_for_operation(rig):
     assert not resource.network_interfaces[0].access_configs
 
 
+def test_spot_launch_stops_and_retains_boot_disk(rig):
+    backend, instances, _ = rig
+    backend.config = replace(backend.config, spot=True, checkpoint_bucket="checkpoints",
+                             service_account="gpu-broker-spot-exp-20261105@test-project.iam.gserviceaccount.com",
+                             workload_revision="workload-sha", model_revision="model-sha",
+                             configuration_sha256="a" * 64)
+    backend.launch(job())
+    resource = instances.inserted[-1]["instance_resource"]
+    assert resource.scheduling.instance_termination_action == "STOP"
+    assert resource.scheduling.max_run_duration is None
+    assert not resource.disks[0].auto_delete
+    backend.terminate(resource.name, "test")
+    assert instances.stopped[-1]["instance"] == resource.name
+    assert instances.deleted == []
+
+
 def test_launch_rejects_features_without_gce_parity(rig):
     backend, instances, _ = rig
-    with pytest.raises(BackendError, match="does not support broker checkpoints"):
+    with pytest.raises(BackendError, match="on-demand mode cannot resume broker checkpoints"):
         backend.launch(job(resumable=True))
-    with pytest.raises(BackendError, match="does not support broker checkpoints"):
+    with pytest.raises(BackendError, match="does not support named container environments"):
         backend.launch(job(environment="pytorch"))
     assert instances.inserted == []
 
@@ -360,9 +381,15 @@ def test_parallel_start_shell_dispatches_command_once(shell_rig):
     assert backend.poll(allocation.handle).status is BackendStatus.COMPLETED
 
 
-@pytest.mark.parametrize("candidate_job", [job(resumable=True), job(environment="pytorch")])
-def test_validate_launch_rejects_unsupported_capabilities(rig, candidate_job):
+@pytest.mark.parametrize(
+    ("candidate_job", "error"),
+    [
+        (job(resumable=True), "on-demand mode cannot resume broker checkpoints"),
+        (job(environment="pytorch"), "does not support named container environments"),
+    ],
+)
+def test_validate_launch_rejects_unsupported_capabilities(rig, candidate_job, error):
     backend, instances, _ = rig
-    with pytest.raises(BackendError, match="does not support broker checkpoints"):
+    with pytest.raises(BackendError, match=error):
         backend.validate_launch(candidate_job)
     assert instances.inserted == []
