@@ -34,6 +34,7 @@ import shlex
 from ..environments import Environment
 from ..local import commands
 from ..local.hosts import HostHealth, HostState, LocalConfig, check_host, start_mps
+from ..local.locality import EnvironmentFacts, prefer_warm
 from ..local.transport import HostSpec, Transport
 from ..models import Job
 from ..money import Currency
@@ -66,6 +67,7 @@ class LocalBackend:
         self._health: dict[str, HostHealth] = {}
         self._manual_drain: dict[str, str] = {}
         self._mps_started: set[str] = set()
+        self._facts = EnvironmentFacts()
         self.environments = environments
         self.volumes = volumes or VolumeConfig()
         self.environment_root = environment_root
@@ -292,7 +294,73 @@ class LocalBackend:
                 f"{self.config.max_jobs_per_gpu} concurrent jobs"
             )
         with_room.sort(key=lambda pair: (-pair[0], pair[1].hostname))
-        return with_room[0][1]
+
+        by_name = {health.hostname: health for _, health in with_room}
+        ranked = [(free, health.hostname) for free, health in with_room]
+
+        # Last, and only among hosts already tied for emptiest: a host that has
+        # this job's environment on disk saves it the build. Never a reason to
+        # pass over a host with more room -- see gpu_broker/local/locality.py.
+        digest = self._environment_digest(job)
+        is_warm = None
+        if digest is not None:
+
+            def is_warm(hostname: str) -> bool:
+                return self._environment_ready(by_name[hostname], digest)
+
+        return by_name[prefer_warm(ranked, is_warm)]
+
+    # ------------------------------------------------------- environments
+
+    def _environment_digest(self, job: Job) -> str | None:
+        """The digest this job needs on disk, or None if it needs nothing.
+
+        None is the answer for a job with no named environment, and it is what
+        keeps that job on exactly the path it took before: no probe, no fact, no
+        tie-break. Spending an SSH round trip to learn something that cannot
+        change the answer is pure cost.
+        """
+        if not job.environment or self.environments is None:
+            return None
+        environment = self.environments(job.environment)
+        return environment.digest if environment is not None else None
+
+    def _environment_ready(self, health: HostHealth, digest: str) -> bool:
+        """Has this host got that exact environment finished and usable?
+
+        False for anything short of certain. A probe that raises, times out, or
+        answers something unreadable hands the decision back to free capacity,
+        which is where it sat before locality existed -- so a host we cannot ask
+        about is a host that simply does not win the tie, never a host that gets
+        held back from a job it could run.
+
+        A failed probe is not remembered. Recording it would spend the whole
+        fact lifetime acting on one bad round trip.
+        """
+        now = self.clock.now()
+        known = self._facts.get(health.hostname, digest, now)
+        if known is not None:
+            return known.materialized
+
+        host = self.host(health.hostname)
+        if host is None:
+            return False
+        try:
+            result = self.transport.run(
+                host,
+                commands.environment_present(
+                    commands.expand(self.environment_root, health.home), digest
+                ),
+                timeout=self.config.poll_timeout_seconds,
+            )
+        except BackendError:
+            return False
+
+        present = commands.parse_environment_present(result.stdout) if result.ok else None
+        if present is None:
+            return False
+        self._facts.record(health.hostname, digest, present, now)
+        return present
 
     def _pick_device(self, health: HostHealth) -> int:
         """Least-loaded card on the chosen host."""

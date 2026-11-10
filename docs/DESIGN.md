@@ -315,6 +315,62 @@ back. If the number does not match, no jobs land there and it says why.
 A drained host keeps running whatever is already on it. Pulling the rug out from
 under somebody's training run is worse than whatever caused the drain.
 
+### Which host, when several would do
+
+The pool has more than one machine, so something has to choose between them. The
+order is fixed and every step before the last one predates environment locality:
+
+1. the host has the GPU type the job asked for;
+2. the host is healthy, and not draining or unreachable;
+3. the host has at least one free slot;
+4. of those, the host with the **most** free slots;
+5. of *those*, a host that already has this job's environment digest built;
+6. of *those*, the first hostname in sort order.
+
+**Step 5 is the only new one, and it is fifth on purpose.** Locality is worth one
+`pip install` to the job that would otherwise pay for it. A busier card is worth
+every hour that job then spends sharing it, and every hour its neighbours spend
+sharing it back. So free capacity is not something the tie-break is allowed to
+trade: it only ever picks a different host out of the group step 4 already
+declared equally good. A job with no named environment skips step 5 entirely and
+takes exactly the path it took before, without so much as a probe.
+
+Nothing here can move a job to a different cost tier. Tier order is decided in
+`placement.choose` before any backend is asked anything; by the time this runs,
+the tier is already settled.
+
+**What counts as the environment being there.** One thing only: the final
+`<root>/<digest>/bin/python` is executable. `Environment.venv_script` installs
+into `<root>/.building-<digest>` and moves the finished tree into place at the
+end, so a build that is still running - or one that died halfway - is never at
+the path this asks about. A different digest, a directory with no interpreter in
+it, and a failed build all read as absent, which is what keeps a wrong cache hit
+from handing somebody a job that runs with the wrong packages and no error.
+
+**What is remembered.** A fact, and nothing more: host, digest, whether it was
+there, when that was seen, and when the observation stops being worth acting on
+(five minutes). No commands, no usernames, no job payloads, no weights. An
+expired fact is not a fact - the broker asks again rather than believing
+something that was true when a virtualenv still existed.
+
+**When the probe fails.** The host does not win the tie, and that is the whole
+consequence. A probe that errors, times out or answers something unreadable is
+never treated as a hit, is never cached, and never stops a job from running
+somewhere it could have run. Locality can only ever make an already-runnable job
+land on a different equally-free host.
+
+**What was measured.** `bench/locality_replay.py` replays 240 scripted jobs
+across three hosts twice - once with the old ordering, once with step 5 - and
+writes `bench/results/locality_replay.json`. On that script the result is a
+**tie**: 15 cold environment materialisations and 3600 simulated seconds of
+environment preparation in both arms, the same 240 jobs admitted, the same cost
+tier. There is no speed claim here to make. What the replay does support is that
+the tie-break costs nothing when it has nothing to act on, and only 15 of 206
+environment jobs on that script ever met a cold environment in the first place.
+It is a deterministic local replay with dictionaries for hosts and a constant for
+the build cost - not a measurement of the lab pool, and not evidence that
+anything in production got faster.
+
 ## Measurement
 
 `gpu report` is generated from the ledger, the job history and the samples. It
