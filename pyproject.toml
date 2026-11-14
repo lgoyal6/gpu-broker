@@ -11,6 +11,15 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Tracing is opt-in and off unless OTEL_EXPORTER_OTLP_ENDPOINT is set, so the SDK
+# is an extra rather than a dependency: `gpu` runs, serves and schedules without
+# it, and gpu_broker/tracing.py imports it only inside setup(). Pinned to the
+# minor line the wire format is stable across; the exporter package is separate
+# from the SDK upstream and both have to move together.
+otel = [
+    "opentelemetry-sdk>=1.44,<2",
+    "opentelemetry-exporter-otlp-proto-http>=1.44,<2",
+]
 web = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.27",
@@ -21,6 +30,7 @@ web = [
 ]
 dev = [
     "gpu-broker[web]",
+    "gpu-broker[otel]",
     "pytest>=8.0",
     "pytest-timeout>=2.3",
     # Mocks the real AWS APIs, so the EC2 backend is tested against what EC2

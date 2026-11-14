@@ -20,6 +20,8 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
+from .. import tracing
+
 # Wait this long for another process's write lock before giving up. The CLI and
 # a running scheduler loop are separate processes hitting the same file.
 BUSY_TIMEOUT_MS = 5_000
@@ -60,10 +62,18 @@ def transaction(conn: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
             "nested transaction: this call is already inside one. "
             "Widen the outer transaction instead of opening a second."
         )
-    conn.execute("BEGIN IMMEDIATE")
-    try:
-        yield conn
-    except BaseException:
-        conn.execute("ROLLBACK")
-        raise
-    conn.execute("COMMIT")
+    # Spanned here rather than per statement. BEGIN IMMEDIATE is where a second
+    # process's write lock is actually waited on, so the wait this system really
+    # suffers is inside this block and nowhere else. A span per `execute` would
+    # be a hundred spans that each say zero.
+    with tracing.span("db.transaction", kind="client",
+                      **{"db.system": "sqlite"}) as span:
+        conn.execute("BEGIN IMMEDIATE")
+        span.add_event("write_lock_acquired")
+        try:
+            yield conn
+        except BaseException:
+            conn.execute("ROLLBACK")
+            span.failed("rollback")
+            raise
+        conn.execute("COMMIT")
